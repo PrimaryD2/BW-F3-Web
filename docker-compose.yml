@@ -39,7 +39,7 @@ services:
       DB_NAME:  ${DB_NAME:-f3_production}
       DB_USER:  ${DB_USER:-f3user}
       DB_PASS:  ${DB_PASS:-f3password}
-      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-secret-before-deploying}
+      JWT_SECRET: ${JWT_SECRET:f0985b3eeaf9eaea6d99ef7c6f375d5d52e4c464cd98e244b5b14873dfa6b14a}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 15s
