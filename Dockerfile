@@ -2,11 +2,9 @@
 FROM node:20-alpine AS client-builder
 WORKDIR /build
 
-# Install client deps
-COPY client/package*.json ./client/
-RUN cd client && npm ci
+COPY client/package.json ./client/
+RUN cd client && npm install
 
-# Copy source and build
 COPY client/  ./client/
 COPY shared/  ./shared/
 RUN cd client && npm run build
@@ -15,18 +13,15 @@ RUN cd client && npm run build
 FROM node:20-alpine AS production
 WORKDIR /app
 
-# Install server production deps only
-COPY server/package*.json ./server/
-RUN cd server && npm ci --omit=dev
+COPY server/package.json ./server/
+RUN cd server && npm install --omit=dev
 
-# Copy server source + shared constants
 COPY server/  ./server/
 COPY shared/  ./shared/
 
 # Copy built React app from Stage 1
 COPY --from=client-builder /build/client/dist ./client/dist
 
-# Make entrypoint executable
 RUN chmod +x /app/server/docker-entrypoint.sh
 
 ENV NODE_ENV=production
