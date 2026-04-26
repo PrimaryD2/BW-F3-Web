@@ -1,38 +1,50 @@
-import jwt from "jsonwebtoken";
-import { env } from "../config/env.js";
-import { pool } from "../db/pool.js";
-import { AppError } from "../utils/errors.js";
+const jwt = require('jsonwebtoken');
+const { query } = require('../config/db');
 
-export function signToken(user) {
+const JWT_SECRET = process.env.JWT_SECRET || 'f3-production-secret-key-change-in-prod';
+
+function generateToken(user) {
   return jwt.sign(
-    { id: user.id, username: user.username, role: user.role },
-    env.jwtSecret,
-    { expiresIn: env.jwtExpiresIn }
+    { id: user.id, username: user.username, role: user.role, name: user.name },
+    JWT_SECRET,
+    { expiresIn: '8h' }
   );
 }
 
-export async function requireAuth(req, _res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) return next(new AppError("Missing token", 401));
+async function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
 
   try {
-    const decoded = jwt.verify(token, env.jwtSecret);
-    const [[user]] = await pool.query(
-      "SELECT id, name, username, role, active, must_change_password FROM users WHERE id = ?",
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const rows = await query(
+      'SELECT id, name, username, role, active, force_password_change FROM users WHERE id = ? AND active = 1',
       [decoded.id]
     );
-    if (!user || !user.active) return next(new AppError("Inactive user", 401));
-    req.user = user;
+    if (!rows || rows.length === 0) {
+      return res.status(401).json({ error: 'User not found or inactive' });
+    }
+    req.user = rows[0];
     next();
-  } catch {
-    next(new AppError("Invalid or expired token", 401));
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid or expired token' });
   }
 }
 
-export function requireRole(...roles) {
-  return (req, _res, next) => {
-    if (!roles.includes(req.user.role)) return next(new AppError("Not allowed for this role", 403));
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
     next();
   };
 }
+
+module.exports = { generateToken, authenticateToken, requireRole, JWT_SECRET };

@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Node modules (rebuilt inside Docker)
+node_modules
+server/node_modules
+client/node_modules
+
+# Client source — only the built dist is needed in the final image
+client/src
+client/public
+client/index.html
+client/vite.config.js
+
+# Dev / local config
+server/.env
+.env
+*.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode
+.idea

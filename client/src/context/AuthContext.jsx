@@ -1,62 +1,93 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api } from "../services/api.js";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 
 const AuthContext = createContext(null);
-const SESSION_KEY = "f3-session";
-const LAST_ACTIVE_KEY = "f3-last-active";
-const EIGHT_HOURS = 8 * 60 * 60 * 1000;
+
+const INACTIVITY_MS = 8 * 60 * 60 * 1000; // 8 hours
+const STORAGE_KEY_TOKEN = 'f3_token';
+const STORAGE_KEY_USER  = 'f3_user';
+const STORAGE_KEY_LAST  = 'f3_last_activity';
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(() => {
-    const saved = localStorage.getItem(SESSION_KEY);
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser]       = useState(null);
+  const [token, setToken]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const inactivityTimer = useRef(null);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(SESSION_KEY);
-    localStorage.removeItem(LAST_ACTIVE_KEY);
-    setSession(null);
+    localStorage.removeItem(STORAGE_KEY_TOKEN);
+    localStorage.removeItem(STORAGE_KEY_USER);
+    localStorage.removeItem(STORAGE_KEY_LAST);
+    delete axios.defaults.headers.common['Authorization'];
+    setToken(null);
+    setUser(null);
+    clearTimeout(inactivityTimer.current);
   }, []);
 
-  const touch = useCallback(() => {
-    localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now()));
-  }, []);
+  const resetInactivityTimer = useCallback(() => {
+    localStorage.setItem(STORAGE_KEY_LAST, Date.now().toString());
+    clearTimeout(inactivityTimer.current);
+    inactivityTimer.current = setTimeout(logout, INACTIVITY_MS);
+  }, [logout]);
 
+  // On activity events
   useEffect(() => {
-    if (!session) return;
-    touch();
-    const events = ["click", "keydown", "touchstart"];
-    events.forEach((event) => window.addEventListener(event, touch, { passive: true }));
-    const timer = window.setInterval(() => {
-      const last = Number(localStorage.getItem(LAST_ACTIVE_KEY) || Date.now());
-      if (Date.now() - last > EIGHT_HOURS) logout();
-    }, 60_000);
-    return () => {
-      events.forEach((event) => window.removeEventListener(event, touch));
-      window.clearInterval(timer);
+    const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    const handler = () => {
+      if (token) resetInactivityTimer();
     };
-  }, [logout, session, touch]);
+    events.forEach(e => window.addEventListener(e, handler, { passive: true }));
+    return () => events.forEach(e => window.removeEventListener(e, handler));
+  }, [token, resetInactivityTimer]);
 
-  async function login(username, password) {
-    const data = await api("/auth/login", { method: "POST", body: { username, password } });
-    const next = { token: data.token, user: data.user };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(next));
-    setSession(next);
-    touch();
-    return next;
-  }
+  // Restore session on mount
+  useEffect(() => {
+    const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN);
+    const storedUser  = localStorage.getItem(STORAGE_KEY_USER);
+    const lastActivity = parseInt(localStorage.getItem(STORAGE_KEY_LAST) || '0');
 
-  async function changePassword(currentPassword, newPassword) {
-    await api("/auth/change-password", { method: "POST", token: session.token, body: { currentPassword, newPassword } });
-    const next = { ...session, user: { ...session.user, mustChangePassword: false } };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(next));
-    setSession(next);
-  }
+    if (storedToken && storedUser && Date.now() - lastActivity < INACTIVITY_MS) {
+      const parsedUser = JSON.parse(storedUser);
+      setToken(storedToken);
+      setUser(parsedUser);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
+      resetInactivityTimer();
+    } else if (storedToken) {
+      logout();
+    }
+    setLoading(false);
+  }, []); // eslint-disable-line
 
-  const value = useMemo(() => ({ session, login, logout, changePassword }), [session, logout]);
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  const login = useCallback((newToken, newUser) => {
+    localStorage.setItem(STORAGE_KEY_TOKEN, newToken);
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(newUser));
+    localStorage.setItem(STORAGE_KEY_LAST, Date.now().toString());
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+    setToken(newToken);
+    setUser(newUser);
+    resetInactivityTimer();
+  }, [resetInactivityTimer]);
+
+  const updateUser = useCallback((updates) => {
+    setUser(prev => {
+      const updated = { ...prev, ...updates };
+      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const isAdmin      = user?.role === 'admin';
+  const isSupervisor = user?.role === 'supervisor' || user?.role === 'admin';
+
+  return (
+    <AuthContext.Provider value={{ user, token, loading, login, logout, updateUser, isAdmin, isSupervisor }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
 }

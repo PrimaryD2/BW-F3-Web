@@ -1,192 +1,266 @@
-# F3 Factory Production Management
+# F3 Production Management System
 
-Production management web application for the F3 station of a carbon fiber 2-seater airplane factory.
+Production management web app for Station F3 of a carbon fiber 2-seater airplane factory.
 
-The app is built as a practical factory-floor MVP with real backend logic, MariaDB persistence, JWT authentication, role-based access, task flow control, sign-offs, time/loss tracking, NCR handling, statistics, PDF exports, and admin tools.
+Sub-stations: **F3-Prep · F3-S1 · F3-S2 · F3-S3a · F3-S3B · F3-S4**
 
-## Stack
+---
 
-- Backend: Node.js + Express
-- Database: MariaDB
-- Frontend: React + Vite
-- Auth: JWT with username/password, stored in browser `localStorage`
-- Roles: `Admin`, `Supervisor`, `Worker`
-- Runtime: Docker Compose
+## Prerequisites
 
-## Folder Structure
+| Requirement | Version |
+|---|---|
+| Node.js | 18+ |
+| npm | 9+ |
+| MariaDB | 10.6+ |
 
-```text
-/
-  docker-compose.yml
-  .env.example
-  README.md
-  /server
-    src/
-      app.js
-      server.js
-      config/
-      db/
-        migrations/
-        seeds/
-      middleware/
-      routes/
-      services/
-      scripts/
-      utils/
-    Dockerfile
-    package.json
-    .env.example
-  /client
-    src/
-      app/
-      components/
-      context/
-      hooks/
-      pages/
-      services/
-      utils/
-    Dockerfile
-    package.json
-    .env.example
-  /shared
-    constants/
+---
+
+## 1. MariaDB Setup
+
+### Create the database and user
+
+```sql
+CREATE DATABASE f3_production CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'f3user'@'localhost' IDENTIFIED BY 'your_secure_password';
+GRANT ALL PRIVILEGES ON f3_production.* TO 'f3user'@'localhost';
+FLUSH PRIVILEGES;
 ```
 
-## Run With Docker
+> You can also use the root account during development.
+
+---
+
+## 2. Configure Environment
 
 ```bash
-docker-compose up --build
-```
-
-Open the frontend:
-
-```text
-http://localhost:5173
-```
-
-From another computer on the same local network:
-
-```text
-http://YOUR_SERVER_IP:5173
-```
-
-The frontend calls the API on the same host at port `4000`, which works for local network clients.
-
-## Default Login
-
-```text
-username: admin
-password: admin123
-```
-
-The default admin user has `must_change_password = true`. On first login, the UI forces a password change before the rest of the app is available.
-
-## Environment
-
-Copy examples if you want local overrides:
-
-```bash
+cd server
 cp .env.example .env
-cp server/.env.example server/.env
-cp client/.env.example client/.env
 ```
 
-Important variables:
+Edit `server/.env`:
 
-| Variable | Purpose |
-| --- | --- |
-| `DB_HOST` | Database host. In Docker this is `db`. |
-| `DB_NAME` | MariaDB database name. |
-| `DB_USER` / `DB_PASSWORD` | Application database credentials. |
-| `MARIADB_ROOT_PASSWORD` | MariaDB root password for the container. |
-| `JWT_SECRET` | Secret used to sign JWTs. Change before real use. |
-| `JWT_EXPIRES_IN` | Token lifetime. Default is `8h`. |
-| `CLIENT_ORIGIN` | CORS origin. Default `*` is practical for a local factory LAN. |
-| `TARGET_HOURS_PER_DAY` | Dashboard target hours. |
-| `VITE_API_URL` | Optional frontend API override. Leave empty for LAN auto-detect. |
+```env
+PORT=3001
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=f3user
+DB_PASS=your_secure_password
+DB_NAME=f3_production
+JWT_SECRET=change-this-to-a-long-random-string
+NODE_ENV=development
+CLIENT_URL=http://localhost:5173
+```
 
-## Migrations And Seeds
+---
 
-The server waits for MariaDB, runs migrations, and applies seed data on startup.
-
-Manual commands:
+## 3. Install Dependencies
 
 ```bash
-docker-compose run --rm server npm run migrate
-docker-compose run --rm server npm run seed
+# Install server dependencies
+cd server
+npm install
+
+# Install client dependencies
+cd ../client
+npm install
 ```
 
-Seed data includes:
+---
 
-- Stations: `F3-Prep`, `F3-S1`, `F3-S2`, `F3-S3a`, `F3-S3B`, `F3-S4`
-- Default admin user
-- Example task templates for `F3-Prep`, `F3-S1`, and `F3-S2`
+## 4. Run Database Migration
 
-## Workflow Summary
-
-Airplanes:
-- Admin/Supervisor creates an airplane by serial number.
-- The system creates task instances from currently active task templates.
-- Later template edits only affect future airplanes, not existing task instances.
-- Status flow: `Draft` → `In Progress` → `QC Review` → `Completed` → optional `Archived`.
-
-Tasks:
-- Tasks are grouped by F3 sub-station.
-- Tasks must be completed sequentially within each station.
-- A later task cannot start until previous station tasks are double-signed.
-- Flow: `Not Started` → `In Progress` → `Pending Sign-off` → `Signed` → `Double-Signed`.
-
-Sign-offs:
-- Password re-entry is required.
-- Primary and double sign-offs are stored separately.
-- Workers cannot double-sign their own primary sign-off.
-- Supervisors are allowed to perform either sign-off.
-- Open high-severity NCRs linked to a task block sign-off.
-
-Time and losses:
-- Multiple workers can run timers on the same task.
-- A worker cannot start a duplicate active timer on the same task.
-- Stopping a timer can also log a production loss reason and minutes.
-
-NCRs:
-- Any user can submit an NCR from a station or task.
-- NCR flow: `open` → `under_review` → `resolved`.
-- Admin/Supervisor can review and resolve NCRs.
-- Reviews are stored in `ncr_approvals` and `audit_logs`.
-
-Exports:
-- Task sheet PDF per airplane/station.
-- NCR detail PDF.
-- Statistics CSV export.
-
-## API Areas
-
-- `/api/auth`
-- `/api/users`
-- `/api/airplanes`
-- `/api/stations`
-- `/api/task-templates`
-- `/api/task-instances`
-- `/api/ncrs`
-- `/api/statistics`
-- `/api/exports`
-- `/api/audit-logs`
-
-## Docker And MariaDB Troubleshooting
-
-If Docker reports that the engine pipe is unavailable or returns a 500 error, restart Docker Desktop and rerun:
+Creates all tables (idempotent — safe to re-run):
 
 ```bash
-docker-compose up --build
+cd server
+npm run migrate
 ```
 
-If the database volume contains old schema data and you want a clean reset:
+---
+
+## 5. Seed the Database
+
+Creates the 6 stations, a default admin user, and sample task templates:
 
 ```bash
-docker-compose down -v
-docker-compose up --build
+cd server
+npm run seed
 ```
 
-If another MariaDB is already using port `3306`, change the published port in `docker-compose.yml`. The server still connects to the Docker service name `db` internally.
+**Default admin credentials:**
 
-If another Vite app is using `5173`, change the client port mapping and open that new port from the browser.
+| Field | Value |
+|---|---|
+| Username | `admin` |
+| Password | `admin123` |
+
+> ⚠ You will be prompted to change this password on first login.
+
+---
+
+## 6. Start the Application
+
+### Development mode (recommended — hot reload on both server and client)
+
+**Terminal 1 — API server:**
+```bash
+cd server
+npm run dev
+```
+
+**Terminal 2 — React client (Vite):**
+```bash
+cd client
+npm run dev
+```
+
+Open: **http://localhost:5173**
+
+---
+
+### Production mode
+
+```bash
+# Build the React client
+cd client
+npm run build
+
+# Start the server (serves the built client)
+cd ../server
+NODE_ENV=production npm start
+```
+
+Open: **http://localhost:3001**
+
+---
+
+## 7. Multi-User / Networked Setup
+
+All factory PCs connect to the same MariaDB server. The Node.js server runs on one machine (or a dedicated server PC):
+
+```
+Factory PCs (browsers)  ──→  Node.js Server (port 3001)  ──→  MariaDB (port 3306)
+```
+
+1. Set `DB_HOST` in `.env` to the IP of the MariaDB machine.
+2. Allow MariaDB to accept remote connections:
+   ```sql
+   CREATE USER 'f3user'@'%' IDENTIFIED BY 'password';
+   GRANT ALL PRIVILEGES ON f3_production.* TO 'f3user'@'%';
+   ```
+3. Workers access the app from their browser: `http://<server-ip>:3001`
+
+---
+
+## Project Structure
+
+```
+/
+├── server/
+│   ├── src/
+│   │   ├── index.js              ← Express entry point
+│   │   ├── config/db.js          ← MariaDB connection pool
+│   │   ├── middleware/auth.js    ← JWT middleware + role guard
+│   │   ├── db/
+│   │   │   ├── migrate.js        ← Creates all tables
+│   │   │   └── seed.js           ← Seeds stations, admin, templates
+│   │   └── routes/
+│   │       ├── auth.js           ← Login, change password, verify password
+│   │       ├── airplanes.js      ← Airplane project CRUD + progress
+│   │       ├── stations.js       ← Station list
+│   │       ├── tasks.js          ← Task instances + sign-offs
+│   │       ├── timeLogs.js       ← Timer start/stop + loss logs
+│   │       ├── ncr.js            ← NCR CRUD + status updates
+│   │       ├── admin.js          ← Users, task templates, audit log
+│   │       ├── statistics.js     ← Charts data + CSV export
+│   │       └── pdf.js            ← PDF task sheet + NCR report
+│   ├── .env.example
+│   └── package.json
+│
+├── client/
+│   ├── src/
+│   │   ├── api/index.js          ← All API call functions
+│   │   ├── context/
+│   │   │   ├── AuthContext.jsx   ← JWT auth + 8h auto-logout
+│   │   │   └── ToastContext.jsx  ← Toast notification system
+│   │   ├── components/
+│   │   │   ├── Layout.jsx        ← Sidebar nav + main content
+│   │   │   ├── ConfirmDialog.jsx
+│   │   │   ├── SignOffModal.jsx  ← Password re-entry sign-off
+│   │   │   ├── LossLogModal.jsx  ← Post-timer loss entry
+│   │   │   └── NCRModal.jsx      ← File nonconformity report
+│   │   └── pages/
+│   │       ├── Login.jsx
+│   │       ├── ChangePassword.jsx
+│   │       ├── Dashboard.jsx     ← Live overview + charts
+│   │       ├── AirplaneList.jsx
+│   │       ├── AirplaneDetail.jsx
+│   │       ├── StationView.jsx   ← Task sheet + timers + sign-offs
+│   │       ├── NCRList.jsx
+│   │       ├── NCRDetail.jsx
+│   │       ├── Statistics.jsx    ← Charts: time, NCR, loss, throughput
+│   │       └── AdminPanel.jsx    ← Users + templates + audit log
+│   ├── vite.config.js
+│   └── package.json
+│
+├── shared/constants.js           ← Shared enums (server-side)
+└── README.md
+```
+
+---
+
+## API Overview
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/auth/login` | Login, returns JWT |
+| GET  | `/api/auth/me` | Current user info |
+| POST | `/api/auth/change-password` | Change own password |
+| POST | `/api/auth/verify-password` | Verify password (for sign-off) |
+| GET  | `/api/airplanes` | List airplanes |
+| POST | `/api/airplanes` | Create airplane |
+| GET  | `/api/airplanes/:id/progress` | Station progress for one plane |
+| GET  | `/api/tasks/airplane/:id/station/:id` | Get (or init) task instances |
+| PUT  | `/api/tasks/:id` | Update task status/notes |
+| POST | `/api/tasks/:id/signoff` | Primary or double sign-off |
+| POST | `/api/time-logs/start` | Start timer |
+| PUT  | `/api/time-logs/:id/stop` | Stop timer |
+| POST | `/api/time-logs/loss` | Log a loss entry |
+| GET  | `/api/ncr` | List NCRs (filterable) |
+| POST | `/api/ncr` | File new NCR |
+| PUT  | `/api/ncr/:id` | Update NCR status (supervisor+) |
+| GET  | `/api/statistics/*` | Chart data endpoints |
+| GET  | `/api/statistics/export/csv` | CSV export |
+| GET  | `/api/pdf/task-sheet/:aid/:sid` | PDF task sheet |
+| GET  | `/api/pdf/ncr/:id` | PDF NCR report |
+| *    | `/api/admin/*` | Admin endpoints (admin role only) |
+
+---
+
+## Roles
+
+| Role | Capabilities |
+|---|---|
+| **Worker** | Log time, sign off own tasks, file NCRs, view dashboards |
+| **Supervisor** | All worker actions + update NCR status, create/edit airplanes |
+| **Admin** | All supervisor actions + manage users, task templates, view full audit log |
+
+---
+
+## Sign-off Rules
+
+1. Worker completes work, stops timer, submits task for sign-off (`pending_signoff`)
+2. Any worker performs **primary sign-off** with password re-entry → status: `signed`
+3. A **different** worker (or any supervisor/admin) performs **double sign-off** → status: `double_signed`
+4. A task with a **high-severity unresolved NCR** is blocked from sign-off until a supervisor resolves the NCR
+5. Tasks within a station must be completed **in order** (sequential by `order_index`)
+
+---
+
+## Notes
+
+- Template changes do **not** affect in-progress airplanes — only newly created projects pick up template changes.
+- Timers are stored server-side; closing the browser does not lose the timer.
+- Sessions expire after **8 hours of inactivity** (JWT + localStorage timestamp).
+- PDF export uses server-side PDFKit — no client-side libraries needed.

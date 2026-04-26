@@ -1,67 +1,53 @@
+version: "3.9"
+
 services:
+
+  # ── MariaDB ──────────────────────────────────────────────────────────────────
   db:
     image: mariadb:11.4
     container_name: f3-db
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-rootpass}
-      MARIADB_DATABASE: ${DB_NAME:-f3_factory}
-      MARIADB_USER: ${DB_USER:-f3_user}
-      MARIADB_PASSWORD: ${DB_PASSWORD:-f3_password}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MARIADB_DATABASE:      ${DB_NAME:-f3_production}
+      MARIADB_USER:          ${DB_USER:-f3user}
+      MARIADB_PASSWORD:      ${DB_PASS:-f3password}
     volumes:
       - f3-db-data:/var/lib/mysql
-    ports:
-      - "3306:3306"
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 30s
 
+  # ── Node.js API + served React app ───────────────────────────────────────────
   server:
-    build: ./server
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: f3-server
     restart: unless-stopped
-    env_file:
-      - ./server/.env.example
-    environment:
-      PORT: ${PORT:-4000}
-      DB_HOST: db
-      DB_PORT: ${DB_PORT:-3306}
-      DB_NAME: ${DB_NAME:-f3_factory}
-      DB_USER: ${DB_USER:-f3_user}
-      DB_PASSWORD: ${DB_PASSWORD:-f3_password}
-      JWT_SECRET: ${JWT_SECRET:-change-this-before-production}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
-      CLIENT_ORIGIN: "${CLIENT_ORIGIN:-*}"
-      TARGET_HOURS_PER_DAY: ${TARGET_HOURS_PER_DAY:-24}
     ports:
-      - "4000:4000"
+      - "${PORT:-3001}:3001"
     depends_on:
       db:
         condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT:     3001
+      DB_HOST:  db
+      DB_PORT:  3306
+      DB_NAME:  ${DB_NAME:-f3_production}
+      DB_USER:  ${DB_USER:-f3user}
+      DB_PASS:  ${DB_PASS:-f3password}
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-secret-before-deploying}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/api/health || exit 1"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 15s
-      timeout: 5s
-      retries: 5
-
-  client:
-    build: ./client
-    container_name: f3-client
-    restart: unless-stopped
-    env_file:
-      - ./client/.env.example
-    ports:
-      - "5173:5173"
-    depends_on:
-      server:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5173 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+      timeout:  10s
+      retries:  5
+      start_period: 60s
 
 volumes:
   f3-db-data:

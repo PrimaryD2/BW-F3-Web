@@ -1,20 +1,22 @@
 {
-  "name": "f3-factory-client",
-  "version": "0.1.0",
-  "private": true,
+  "name": "f3-app-client",
+  "version": "1.0.0",
+  "description": "F3 Station Production Management System — Frontend",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "recharts": "^2.15.0",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "axios": "^1.6.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.1",
+    "recharts": "^2.10.1"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.6"
+  }
 }
