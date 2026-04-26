@@ -1,0 +1,17 @@
+{
+  "roles": ["Admin", "Supervisor", "Worker"],
+  "stations": ["F3-Prep", "F3-S1", "F3-S2", "F3-S3a", "F3-S3B", "F3-S4"],
+  "airplaneStatuses": ["Draft", "In Progress", "QC Review", "Completed", "Archived"],
+  "taskStatuses": ["Not Started", "In Progress", "Pending Sign-off", "Signed", "Double-Signed"],
+  "signatureTypes": ["primary", "double"],
+  "lossReasons": [
+    "walked_to_warehouse",
+    "fix_issue",
+    "missing_tools",
+    "waiting_for_material",
+    "machine_downtime",
+    "other"
+  ],
+  "ncrSeverities": ["low", "medium", "high"],
+  "ncrStatuses": ["open", "under_review", "resolved"]
+}
