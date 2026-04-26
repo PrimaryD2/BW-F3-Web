@@ -9,18 +9,18 @@ import NCRModal from '../components/NCRModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 const STATUS_COLOR = {
-  not_started:    'var(--text-muted)',
-  in_progress:    'var(--accent)',
-  pending_signoff:'var(--purple)',
-  signed:         'var(--warning)',
-  double_signed:  'var(--success)',
+  not_started:     'var(--text-muted)',
+  in_progress:     'var(--accent)',
+  pending_signoff: 'var(--purple)',
+  signed:          'var(--warning)',
+  double_signed:   'var(--success)',
 };
 const STATUS_BG = {
-  not_started:    'rgba(148,163,184,0.08)',
-  in_progress:    'rgba(79,142,247,0.10)',
-  pending_signoff:'rgba(139,92,246,0.10)',
-  signed:         'rgba(245,158,11,0.10)',
-  double_signed:  'rgba(34,197,94,0.10)',
+  not_started:     'rgba(148,163,184,0.08)',
+  in_progress:     'rgba(79,142,247,0.10)',
+  pending_signoff: 'rgba(139,92,246,0.10)',
+  signed:          'rgba(245,158,11,0.10)',
+  double_signed:   'rgba(34,197,94,0.10)',
 };
 
 function formatMinutes(mins) {
@@ -42,27 +42,29 @@ function ElapsedTimer({ startedAt }) {
   const h = Math.floor(elapsed / 3600);
   const m = Math.floor((elapsed % 3600) / 60);
   const s = elapsed % 60;
-  return <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
-    {h > 0 && `${h}h `}{String(m).padStart(2,'0')}:{String(s).padStart(2,'0')}
-  </span>;
+  return (
+    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
+      {h > 0 && `${h}h `}{String(m).padStart(2, '0')}:{String(s).padStart(2, '0')}
+    </span>
+  );
 }
 
 export default function StationView() {
   const { airplaneId, stationId } = useParams();
-  const navigate = useNavigate();
-  const { user } = useAuth();
-  const toast = useToast();
+  const navigate  = useNavigate();
+  const { user }  = useAuth();
+  const toast     = useToast();
 
-  const [airplane, setAirplane]   = useState(null);
-  const [tasks, setTasks]         = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [stationName, setStation] = useState('');
+  const [airplane, setAirplane]         = useState(null);
+  const [tasks, setTasks]               = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [stationName, setStationName]   = useState('');
 
-  const [signOffModal, setSignOffModal]   = useState(null); // { task, type }
-  const [lossModal, setLossModal]         = useState(null); // { taskId, title, stoppedLogId }
-  const [ncrModal, setNcrModal]           = useState(null); // { taskId }
-  const [expandedTask, setExpanded]       = useState(null);
-  const [confirmSubmit, setConfirmSubmit] = useState(null); // task
+  const [signOffModal, setSignOffModal] = useState(null); // { task, type }
+  const [lossModal, setLossModal]       = useState(null); // { taskId, title }
+  const [ncrModal, setNcrModal]         = useState(null); // { taskId }
+  const [expandedTask, setExpanded]     = useState(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,9 +76,9 @@ export default function StationView() {
       setTasks(taskRes.data);
       setAirplane(planeRes.data);
       if (taskRes.data.length > 0) {
-        setStation(taskRes.data[0].station_name || '');
+        setStationName(taskRes.data[0].station_name || '');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to load tasks');
     } finally {
       setLoading(false);
@@ -85,11 +87,11 @@ export default function StationView() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Determine if a task is unlocked (all prior tasks double_signed)
+  // All prior non-section-header tasks must be double_signed before this one is unlocked
   function isUnlocked(task, index) {
     if (index === 0) return true;
     for (let i = 0; i < index; i++) {
-      if (tasks[i].status !== 'double_signed') return false;
+      if (!tasks[i].is_section_header && tasks[i].status !== 'double_signed') return false;
     }
     return true;
   }
@@ -129,17 +131,32 @@ export default function StationView() {
       await updateTask(taskId, { notes });
       toast.success('Notes saved.');
       load();
-    } catch (err) {
+    } catch {
       toast.error('Failed to save notes');
     }
   }
 
-  function handleSignOffSuccess(data) {
+  async function handleSaveSerialNumber(taskId, serial) {
+    try {
+      await updateTask(taskId, { installed_part_serial: serial });
+      toast.success('Serial number saved.');
+      load();
+    } catch {
+      toast.error('Failed to save serial number');
+    }
+  }
+
+  function handleSignOffSuccess() {
     setSignOffModal(null);
     load();
   }
 
   function getSignOffAction(task) {
+    if (task.is_section_header) return null;
+    // Block sign-off if part serial number required but not yet entered
+    if (task.requires_serial_number && !task.installed_part_serial) {
+      return { type: null, serialMissing: true };
+    }
     const primary = task.signoffs?.find(s => s.signature_type === 'primary');
     const dbl     = task.signoffs?.find(s => s.signature_type === 'double');
     if (!primary && (task.status === 'in_progress' || task.status === 'pending_signoff')) {
@@ -164,7 +181,9 @@ export default function StationView() {
           <button onClick={() => navigate(`/airplanes/${airplaneId}`)} className="btn btn-ghost btn-sm" style={{ marginBottom: 8 }}>
             ← Back to {airplane?.serial_number}
           </button>
-          <div className="page-title">Station {tasks[0]?.station_name || stationId}</div>
+          <div className="page-title">
+            {stationName || `Station ${stationId}`}
+          </div>
           <div className="page-subtitle">{airplane?.serial_number} · {airplane?.model}</div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -182,14 +201,39 @@ export default function StationView() {
           <p style={{ color: 'var(--text-muted)' }}>No task templates defined for this station.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {tasks.map((task, index) => {
-            const unlocked = isUnlocked(task, index);
-            const signoffAction = getSignOffAction(task);
-            const primary = task.signoffs?.find(s => s.signature_type === 'primary');
-            const dbl     = task.signoffs?.find(s => s.signature_type === 'double');
-            const overTime = task.total_minutes > 0 && task.total_minutes > task.estimated_minutes * 1.1;
-            const isExpanded = expandedTask === task.id;
+            // Section headers render as visual dividers
+            if (task.is_section_header) {
+              return (
+                <div key={task.id} style={{
+                  background: 'rgba(79,142,247,0.08)',
+                  border: '1px solid rgba(79,142,247,0.25)',
+                  borderLeft: '4px solid var(--accent)',
+                  borderRadius: 8, padding: '10px 18px',
+                  display: 'flex', alignItems: 'center', gap: 12,
+                }}>
+                  {task.op_number && (
+                    <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--accent)', fontWeight: 700 }}>
+                      {task.op_number}
+                    </span>
+                  )}
+                  <span style={{ fontWeight: 800, fontSize: 15 }}>{task.title}</span>
+                  <span style={{ fontSize: 10, color: 'var(--accent)', background: 'rgba(79,142,247,0.15)', padding: '2px 7px', borderRadius: 4, fontWeight: 700 }}>
+                    SECTION
+                  </span>
+                </div>
+              );
+            }
+
+            const unlocked       = isUnlocked(task, index);
+            const signoffAction  = getSignOffAction(task);
+            const primary        = task.signoffs?.find(s => s.signature_type === 'primary');
+            const dbl            = task.signoffs?.find(s => s.signature_type === 'double');
+            const overTime       = task.total_minutes > 0 && task.total_minutes > task.estimated_minutes * 1.1;
+            const isExpanded     = expandedTask === task.id;
+            const kits           = Array.isArray(task.kits_required)  ? task.kits_required  : [];
+            const images         = Array.isArray(task.image_urls)     ? task.image_urls     : [];
 
             return (
               <div
@@ -202,18 +246,24 @@ export default function StationView() {
                   transition: 'opacity 0.2s',
                 }}
               >
-                {/* Task header */}
+                {/* Task header row — click to expand */}
                 <div
                   onClick={() => setExpanded(isExpanded ? null : task.id)}
                   style={{ padding: '14px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14 }}
                 >
-                  {/* Order badge */}
+                  {/* Op number / status badge */}
                   <div style={{
-                    width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
-                    background: STATUS_COLOR[task.status], display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontWeight: 800, fontSize: 13, color: 'white',
+                    minWidth: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                    background: STATUS_COLOR[task.status],
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 800, fontSize: task.op_number ? 10 : 13, color: 'white',
+                    padding: task.op_number ? '2px' : 0,
                   }}>
-                    {task.status === 'double_signed' ? '✓' : task.order_index}
+                    {task.status === 'double_signed'
+                      ? '✓'
+                      : task.op_number
+                        ? task.op_number
+                        : task.order_index}
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -224,14 +274,26 @@ export default function StationView() {
                       </span>
                       {task.blocked_by_ncr && <span className="badge badge-danger" style={{ fontSize: 10 }}>BLOCKED</span>}
                       {!unlocked && <span className="badge badge-ghost" style={{ fontSize: 10 }}>LOCKED</span>}
+                      {task.requires_serial_number && !task.installed_part_serial && (
+                        <span className="badge badge-warning" style={{ fontSize: 10 }}>S/N NEEDED</span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                      <span>Est: {formatMinutes(task.estimated_minutes)}</span>
+                      {task.estimated_minutes > 0 && <span>Est: {formatMinutes(task.estimated_minutes)}</span>}
                       <span style={{ color: overTime ? 'var(--danger)' : 'inherit' }}>
-                        Actual: {formatMinutes(task.total_minutes)}
-                        {overTime && ' ⚠'}
+                        Actual: {formatMinutes(task.total_minutes)}{overTime && ' ⚠'}
                       </span>
-                      {task.active_timers > 0 && <span style={{ color: 'var(--accent)' }}>● {task.active_timers} active timer{task.active_timers > 1 ? 's' : ''}</span>}
+                      {task.active_timers > 0 && (
+                        <span style={{ color: 'var(--accent)' }}>
+                          ● {task.active_timers} active timer{task.active_timers > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {kits.length > 0 && (
+                        <span>📦 {kits.length} kit{kits.length !== 1 ? 's' : ''}</span>
+                      )}
+                      {task.drawing_reference && (
+                        <span style={{ fontFamily: 'monospace' }}>📐 {task.drawing_reference}</span>
+                      )}
                     </div>
                   </div>
 
@@ -241,11 +303,103 @@ export default function StationView() {
                 {/* Expanded body */}
                 {isExpanded && (
                   <div style={{ borderTop: '1px solid var(--border)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                    {/* Description */}
                     {task.description && (
-                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: 13 }}>{task.description}</p>
+                      <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: 13, margin: 0 }}>
+                        {task.description}
+                      </p>
                     )}
 
-                    {/* Timer + live elapsed */}
+                    {/* Drawing reference + instructions */}
+                    {(task.drawing_reference || task.instructions) && (
+                      <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '12px 14px' }}>
+                        {task.drawing_reference && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: task.instructions ? 10 : 0 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Drawing / IPC Ref</span>
+                            <span style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--accent)', fontWeight: 700 }}>
+                              {task.drawing_reference}
+                            </span>
+                          </div>
+                        )}
+                        {task.instructions && (
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+                              Instructions
+                            </div>
+                            <pre style={{
+                              fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7,
+                              whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0,
+                            }}>
+                              {task.instructions}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Kits required */}
+                    {kits.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8 }}>
+                          📦 Kits Required
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {kits.map((kit, i) => (
+                            <div key={i} style={{
+                              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                              borderRadius: 6, padding: '6px 12px', fontSize: 12,
+                            }}>
+                              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
+                                {kit.kit_number}
+                              </span>
+                              {kit.description && (
+                                <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{kit.description}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Reference images */}
+                    {images.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 8 }}>
+                          Reference Images
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                          {images.map((url, i) => (
+                            <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                              style={{ display: 'block', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                              <img
+                                src={url}
+                                alt={`Reference ${i + 1}`}
+                                style={{ width: 140, height: 100, objectFit: 'cover', display: 'block' }}
+                                onError={e => {
+                                  e.target.style.display = 'none';
+                                  e.target.nextSibling.style.display = 'flex';
+                                }}
+                              />
+                              <div style={{
+                                display: 'none', width: 140, height: 100,
+                                alignItems: 'center', justifyContent: 'center',
+                                background: 'var(--bg-secondary)', fontSize: 11, color: 'var(--text-muted)',
+                              }}>
+                                🔗 Image {i + 1}
+                              </div>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Installed part serial number */}
+                    {task.requires_serial_number && (
+                      <SerialNumberEditor task={task} onSave={handleSaveSerialNumber} />
+                    )}
+
+                    {/* Timer controls */}
                     {unlocked && task.status !== 'double_signed' && (
                       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                         {task.my_active_timer ? (
@@ -266,13 +420,19 @@ export default function StationView() {
                             ▶ Start Timer
                           </button>
                         )}
+
                         {task.status === 'in_progress' && !task.my_active_timer && (
                           <button className="btn btn-ghost btn-sm" onClick={() => setConfirmSubmit(task)}>
                             📋 Submit for Sign-off
                           </button>
                         )}
+
                         {task.blocked_by_ncr ? (
                           <span style={{ fontSize: 12, color: 'var(--danger)' }}>🔒 Blocked by open High NCR</span>
+                        ) : signoffAction?.serialMissing ? (
+                          <span style={{ fontSize: 12, color: 'var(--warning)' }}>
+                            ⚠ Enter part serial number to unlock sign-off
+                          </span>
                         ) : signoffAction && (
                           <button
                             className={`btn btn-sm ${signoffAction.type === 'double' ? 'btn-warning' : 'btn-success'}`}
@@ -281,39 +441,54 @@ export default function StationView() {
                             ✅ {signoffAction.label}
                           </button>
                         )}
+
                         <button className="btn btn-ghost btn-sm" onClick={() => setNcrModal({ taskId: task.id })}>
                           ⚠ NCR
                         </button>
                       </div>
                     )}
 
-                    {/* Sign-off records */}
+                    {/* Sign-off record */}
                     {(primary || dbl) && (
                       <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '12px 14px', fontSize: 12 }}>
-                        <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, fontSize: 11, textTransform: 'uppercase' }}>Sign-off Record</div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, fontSize: 11, textTransform: 'uppercase' }}>
+                          Sign-off Record
+                        </div>
                         {primary && (
-                          <div style={{ marginBottom: 4 }}>
-                            <span style={{ color: 'var(--warning)' }}>Primary:</span>{' '}
-                            {primary.signed_by_name} — {new Date(primary.signed_at).toLocaleString()}
+                          <div style={{ marginBottom: 6, display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                            <span style={{ color: 'var(--warning)', fontWeight: 600, minWidth: 60 }}>Primary:</span>
+                            <span>{primary.signed_by_name}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                              {new Date(primary.signed_at).toLocaleString()}
+                            </span>
                           </div>
                         )}
                         {dbl && (
-                          <div>
-                            <span style={{ color: 'var(--success)' }}>Double:</span>{' '}
-                            {dbl.signed_by_name} — {new Date(dbl.signed_at).toLocaleString()}
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                            <span style={{ color: 'var(--success)', fontWeight: 600, minWidth: 60 }}>Double:</span>
+                            <span>{dbl.signed_by_name}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                              {new Date(dbl.signed_at).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        {task.installed_part_serial && (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', minWidth: 60 }}>Part S/N:</span>
+                            <span style={{ fontFamily: 'monospace', color: 'var(--success)' }}>{task.installed_part_serial}</span>
                           </div>
                         )}
                       </div>
                     )}
 
-                    {/* NCR list */}
+                    {/* NCR badges */}
                     {task.ncrs && task.ncrs.length > 0 && (
-                      <div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {task.ncrs.map(n => (
                           <div
                             key={n.id}
                             onClick={() => navigate(`/ncr/${n.id}`)}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginRight: 8 }}
+                            style={{ cursor: 'pointer' }}
                           >
                             <span className={`badge badge-${n.severity === 'high' ? 'danger' : n.severity === 'medium' ? 'warning' : 'success'}`}>
                               NCR #{n.id} · {n.severity}
@@ -375,6 +550,7 @@ export default function StationView() {
   );
 }
 
+// ─── Notes editor ─────────────────────────────────────────────────────────────
 function NotesEditor({ task, onSave }) {
   const [notes, setNotes]     = useState(task.notes || '');
   const [editing, setEditing] = useState(false);
@@ -396,11 +572,10 @@ function NotesEditor({ task, onSave }) {
             {task.notes ? 'Edit' : '+ Add Note'}
           </button>
         </div>
-        {task.notes ? (
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{task.notes}</p>
-        ) : (
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>No notes</p>
-        )}
+        {task.notes
+          ? <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{task.notes}</p>
+          : <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>No notes</p>
+        }
       </div>
     );
   }
@@ -413,6 +588,69 @@ function NotesEditor({ task, onSave }) {
         <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Notes'}</button>
         <button className="btn btn-ghost btn-sm" onClick={() => { setNotes(task.notes || ''); setEditing(false); }}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// ─── Serial number editor ─────────────────────────────────────────────────────
+function SerialNumberEditor({ task, onSave }) {
+  const [serial, setSerial]   = useState(task.installed_part_serial || '');
+  const [editing, setEditing] = useState(!task.installed_part_serial); // open by default if not yet set
+  const [saving, setSaving]   = useState(false);
+
+  async function save() {
+    if (!serial.trim()) return;
+    setSaving(true);
+    await onSave(task.id, serial.trim());
+    setSaving(false);
+    setEditing(false);
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', marginBottom: 8 }}>
+        🔖 Installed Part Serial Number *
+      </div>
+      {!editing && task.installed_part_serial ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 14, color: 'var(--success)', fontWeight: 700 }}>
+            {task.installed_part_serial}
+          </span>
+          {task.status !== 'double_signed' && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)} style={{ fontSize: 11 }}>
+              Edit
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={serial}
+            onChange={e => setSerial(e.target.value)}
+            placeholder="Enter serial number of installed part…"
+            style={{ flex: 1 }}
+            autoFocus
+            onKeyDown={e => e.key === 'Enter' && save()}
+          />
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={save}
+            disabled={saving || !serial.trim()}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          {task.installed_part_serial && (
+            <button className="btn btn-ghost btn-sm" onClick={() => { setSerial(task.installed_part_serial); setEditing(false); }}>
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+      {!task.installed_part_serial && (
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Required before primary sign-off can be recorded.
+        </p>
+      )}
     </div>
   );
 }

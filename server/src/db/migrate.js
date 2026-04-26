@@ -115,13 +115,32 @@ CREATE TABLE IF NOT EXISTS ncr_approvals (
 );
 `;
 
+// Additive column additions — safe to re-run on an existing database.
+// MariaDB 10.0+ supports ADD COLUMN IF NOT EXISTS.
+const ALTER_STMTS = [
+  // Task template enrichment fields
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS op_number VARCHAR(20) NULL`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS is_section_header BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS kits_required TEXT NULL`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS drawing_reference VARCHAR(200) NULL`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS instructions TEXT NULL`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS requires_serial_number BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS image_urls TEXT NULL`,
+  // Installed part traceability on task instances
+  `ALTER TABLE task_instances ADD COLUMN IF NOT EXISTS installed_part_serial VARCHAR(100) NULL`,
+];
+
 async function migrate() {
   let conn;
   try {
     conn = await pool.getConnection();
-    // Run each statement separately
+    // Base schema — idempotent CREATE TABLE IF NOT EXISTS
     const statements = SQL.split(';').map(s => s.trim()).filter(s => s.length > 0);
     for (const stmt of statements) {
+      await conn.query(stmt);
+    }
+    // Additive columns — safe to run on existing schema
+    for (const stmt of ALTER_STMTS) {
       await conn.query(stmt);
     }
     console.log('✅ Migration completed successfully.');

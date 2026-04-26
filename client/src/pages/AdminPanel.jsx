@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { getUsers, createUser, updateUser, getTaskTemplates, getStations, createTemplate, updateTemplate, getAuditLog } from '../api';
+import {
+  getUsers, createUser, updateUser,
+  getTaskTemplates, getStations, createTemplate, updateTemplate,
+  getAuditLog,
+} from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-
 const TABS = ['Users', 'Task Templates', 'Audit Log'];
 
 export default function AdminPanel() {
-  const [tab, setTab]           = useState(0);
+  const [tab, setTab] = useState(0);
   return (
     <div className="page">
       <div className="page-header">
@@ -125,7 +128,6 @@ function UsersTab() {
         </div>
       )}
 
-      {/* Create modal */}
       {showCreate && (
         <div className="modal-overlay" onClick={() => setCreate(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -157,7 +159,6 @@ function UsersTab() {
         </div>
       )}
 
-      {/* Edit modal */}
       {editUser && (
         <div className="modal-overlay" onClick={() => setEditUser(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -195,7 +196,14 @@ function UsersTab() {
   );
 }
 
-// ─── Templates Tab ────────────────────────────────────────────────────────────
+// ─── Templates Tab ─────────────────────────────────────────────────────────────
+const EMPTY_FORM = {
+  station_id: '', title: '', description: '', estimated_minutes: 60, order_index: 0,
+  op_number: '', is_section_header: false,
+  kits_required: [], drawing_reference: '', instructions: '',
+  requires_serial_number: false, image_urls: [],
+};
+
 function TemplatesTab() {
   const toast = useToast();
   const [templates, setTemplates] = useState([]);
@@ -204,34 +212,58 @@ function TemplatesTab() {
   const [filterStation, setFilt]  = useState('');
   const [showCreate, setCreate]   = useState(false);
   const [editTpl, setEditTpl]     = useState(null);
-  const [form, setForm]           = useState({ station_id: '', title: '', description: '', estimated_minutes: 60, order_index: 0 });
+  const [form, setForm]           = useState(EMPTY_FORM);
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState('');
 
   useEffect(() => {
     Promise.all([getTaskTemplates(), getStations()]).then(([tRes, sRes]) => {
-      setTemplates(tRes.data); setStations(sRes.data);
+      setTemplates(tRes.data);
+      setStations(sRes.data);
     }).finally(() => setLoading(false));
   }, []);
 
+  function openCreate() {
+    setForm({ ...EMPTY_FORM });
+    setError(''); setCreate(true);
+  }
+
+  function openEdit(t) {
+    setForm({
+      title: t.title, description: t.description || '',
+      estimated_minutes: t.estimated_minutes, order_index: t.order_index,
+      op_number: t.op_number || '',
+      is_section_header: Boolean(t.is_section_header),
+      kits_required: Array.isArray(t.kits_required) ? t.kits_required : [],
+      drawing_reference: t.drawing_reference || '',
+      instructions: t.instructions || '',
+      requires_serial_number: Boolean(t.requires_serial_number),
+      image_urls: Array.isArray(t.image_urls) ? t.image_urls : [],
+    });
+    setError(''); setEditTpl(t);
+  }
+
+  function closeModal() { setCreate(false); setEditTpl(null); }
+
   async function handleCreate(e) {
     e.preventDefault();
-    if (!form.station_id || !form.title) { setError('Station and title required'); return; }
+    if (!form.station_id || !form.title) { setError('Station and title are required'); return; }
     setSaving(true); setError('');
     try {
       const res = await createTemplate(form);
       setTemplates(prev => [...prev, res.data]);
-      toast.success('Template created.'); setCreate(false);
+      toast.success('Template created.'); closeModal();
     } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
   }
 
   async function handleUpdate(e) {
     e.preventDefault();
+    if (!form.title) { setError('Title is required'); return; }
     setSaving(true); setError('');
     try {
       const res = await updateTemplate(editTpl.id, form);
       setTemplates(prev => prev.map(t => t.id === editTpl.id ? res.data : t));
-      toast.success('Template updated.'); setEditTpl(null);
+      toast.success('Template updated.'); closeModal();
     } catch (err) { setError(err.response?.data?.error || 'Failed'); setSaving(false); }
   }
 
@@ -243,87 +275,389 @@ function TemplatesTab() {
     } catch { toast.error('Failed to update template'); }
   }
 
+  // Group templates by station, sorted by op_number then order_index
   const filtered = templates.filter(t => !filterStation || String(t.station_id) === filterStation);
+  const byStation = {};
+  for (const t of filtered) {
+    const key = t.station_name || `Station ${t.station_id}`;
+    if (!byStation[key]) byStation[key] = [];
+    byStation[key].push(t);
+  }
+  // Each station's templates are already sorted by the server (op_number, order_index)
+
+  // Inline form (shared for create/edit)
+  const F = form; // shorthand
+  const setF = (patch) => setForm(f => typeof patch === 'function' ? patch(f) : { ...f, ...patch });
+
+  function addKit()   { setF(f => ({ ...f, kits_required: [...f.kits_required, { kit_number: '', description: '' }] })); }
+  function removeKit(i) { setF(f => ({ ...f, kits_required: f.kits_required.filter((_, j) => j !== i) })); }
+  function setKit(i, field, val) {
+    setF(f => { const k = [...f.kits_required]; k[i] = { ...k[i], [field]: val }; return { ...f, kits_required: k }; });
+  }
+  function addImg()     { setF(f => ({ ...f, image_urls: [...f.image_urls, ''] })); }
+  function removeImg(i) { setF(f => ({ ...f, image_urls: f.image_urls.filter((_, j) => j !== i) })); }
+  function setImg(i, val) {
+    setF(f => { const u = [...f.image_urls]; u[i] = val; return { ...f, image_urls: u }; });
+  }
+
+  const sectionStyle = {
+    borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 6, marginBottom: 6,
+  };
+  const sectionLabel = {
+    fontWeight: 700, fontSize: 11, color: 'var(--text-muted)',
+    textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10, display: 'block',
+  };
 
   const TemplateForm = ({ onSubmit }) => (
     <form onSubmit={onSubmit}>
-      {!editTpl && (
-        <div className="form-group">
-          <label>Station *</label>
-          <select value={form.station_id} onChange={e => setForm(f => ({ ...f, station_id: e.target.value }))}>
-            <option value="">Select station…</option>
-            {stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+      <div style={{ maxHeight: '72vh', overflowY: 'auto', paddingRight: 4 }}>
+        {/* Station (create only) */}
+        {!editTpl && (
+          <div className="form-group">
+            <label>Station *</label>
+            <select value={F.station_id} onChange={e => setF({ station_id: e.target.value })}>
+              <option value="">Select station…</option>
+              {stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Op Number + Section Header toggle */}
+        <div className="form-row form-row-2">
+          <div className="form-group">
+            <label>Op Number</label>
+            <input
+              placeholder="e.g. 310.010"
+              value={F.op_number}
+              onChange={e => setF({ op_number: e.target.value })}
+            />
+          </div>
+          <div className="form-group" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', paddingBottom: 8 }}>
+              <input
+                type="checkbox"
+                checked={F.is_section_header}
+                onChange={e => setF({ is_section_header: e.target.checked })}
+              />
+              Section header (group divider)
+            </label>
+          </div>
         </div>
-      )}
-      <div className="form-group"><label>Title *</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} autoFocus /></div>
-      <div className="form-group"><label>Description</label><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} /></div>
-      <div className="form-row form-row-2">
-        <div className="form-group"><label>Estimated Minutes</label><input type="number" min="1" value={form.estimated_minutes} onChange={e => setForm(f => ({ ...f, estimated_minutes: parseInt(e.target.value) }))} /></div>
-        <div className="form-group"><label>Order Index</label><input type="number" min="0" value={form.order_index} onChange={e => setForm(f => ({ ...f, order_index: parseInt(e.target.value) }))} /></div>
+
+        {/* Title + Description */}
+        <div className="form-group">
+          <label>Title *</label>
+          <input
+            value={F.title}
+            onChange={e => setF({ title: e.target.value })}
+            autoFocus
+            placeholder={F.is_section_header ? 'e.g. Kit Preparation' : 'e.g. Verify Kit Contents'}
+          />
+        </div>
+        {!F.is_section_header && (
+          <div className="form-group">
+            <label>Description / What to do</label>
+            <textarea
+              value={F.description}
+              onChange={e => setF({ description: e.target.value })}
+              rows={2}
+              placeholder="Brief overview of what this task involves…"
+            />
+          </div>
+        )}
+
+        {/* Timing */}
+        {!F.is_section_header && (
+          <div className="form-row form-row-2">
+            <div className="form-group">
+              <label>Estimated Minutes</label>
+              <input type="number" min="0" value={F.estimated_minutes}
+                onChange={e => setF({ estimated_minutes: parseInt(e.target.value) || 0 })} />
+            </div>
+            <div className="form-group">
+              <label>Order Index</label>
+              <input type="number" min="0" value={F.order_index}
+                onChange={e => setF({ order_index: parseInt(e.target.value) || 0 })} />
+            </div>
+          </div>
+        )}
+        {F.is_section_header && (
+          <div className="form-group">
+            <label>Order Index</label>
+            <input type="number" min="0" value={F.order_index}
+              onChange={e => setF({ order_index: parseInt(e.target.value) || 0 })} />
+          </div>
+        )}
+
+        {/* Drawing & Instructions */}
+        {!F.is_section_header && (
+          <div style={sectionStyle}>
+            <span style={sectionLabel}>Drawing &amp; Instructions</span>
+            <div className="form-group">
+              <label>Drawing / IPC Reference Number</label>
+              <input
+                placeholder="e.g. DWG-310-A Rev.2"
+                value={F.drawing_reference}
+                onChange={e => setF({ drawing_reference: e.target.value })}
+              />
+            </div>
+            <div className="form-group">
+              <label>Instructions</label>
+              <textarea
+                placeholder="Step-by-step instructions, torque values, safety notes…"
+                value={F.instructions}
+                onChange={e => setF({ instructions: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Kits Required */}
+        {!F.is_section_header && (
+          <div style={sectionStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={sectionLabel}>Kits Required</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={addKit}>+ Add Kit</button>
+            </div>
+            {F.kits_required.length === 0 ? (
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 4 }}>No kits specified</p>
+            ) : (
+              F.kits_required.map((kit, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                  <input
+                    style={{ width: 130, flexShrink: 0 }}
+                    placeholder="Kit #"
+                    value={kit.kit_number}
+                    onChange={e => setKit(i, 'kit_number', e.target.value)}
+                  />
+                  <input
+                    style={{ flex: 1 }}
+                    placeholder="Description"
+                    value={kit.description}
+                    onChange={e => setKit(i, 'description', e.target.value)}
+                  />
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeKit(i)}
+                    style={{ flexShrink: 0, color: 'var(--danger)' }}>✕</button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Serial number requirement */}
+        {!F.is_section_header && (
+          <div style={sectionStyle}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>
+              <input
+                type="checkbox"
+                checked={F.requires_serial_number}
+                onChange={e => setF({ requires_serial_number: e.target.checked })}
+              />
+              Require installed part serial number at sign-off
+            </label>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+              When enabled, workers must enter the serial number of the installed part before the primary sign-off is accepted.
+            </p>
+          </div>
+        )}
+
+        {/* Reference Images */}
+        {!F.is_section_header && (
+          <div style={sectionStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={sectionLabel}>Reference Images (URLs)</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={addImg}>+ Add Image</button>
+            </div>
+            {F.image_urls.length === 0 ? (
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 4 }}>No images specified</p>
+            ) : (
+              F.image_urls.map((url, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                  <input
+                    style={{ flex: 1 }}
+                    placeholder="https://example.com/image.jpg"
+                    value={url}
+                    onChange={e => setImg(i, e.target.value)}
+                  />
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeImg(i)}
+                    style={{ flexShrink: 0, color: 'var(--danger)' }}>✕</button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
-      {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
-      <div className="modal-actions">
-        <button type="button" className="btn btn-ghost" onClick={() => { setCreate(false); setEditTpl(null); }}>Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (editTpl ? 'Save Changes' : 'Create Template')}</button>
+
+      {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 12, marginBottom: 4 }}>{error}</p>}
+      <div className="modal-actions" style={{ marginTop: 16 }}>
+        <button type="button" className="btn btn-ghost" onClick={closeModal}>Cancel</button>
+        <button type="submit" className="btn btn-primary" disabled={saving}>
+          {saving ? 'Saving…' : (editTpl ? 'Save Changes' : 'Create Template')}
+        </button>
       </div>
     </form>
   );
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
         <select style={{ width: 200 }} value={filterStation} onChange={e => setFilt(e.target.value)}>
           <option value="">All Stations</option>
           {stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <button className="btn btn-primary" onClick={() => { setForm({ station_id: '', title: '', description: '', estimated_minutes: 60, order_index: 0 }); setError(''); setCreate(true); }}>
-          + New Template
-        </button>
+        <button className="btn btn-primary" onClick={openCreate}>+ New Template</button>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-        ⚠ Template changes only apply to newly created airplane projects.
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 20 }}>
+        ⚠ Template changes only apply to <strong>newly created</strong> airplane projects. Existing task instances are not affected.
       </p>
+
       {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : (
-        <div className="card" style={{ padding: 0 }}>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>#</th><th>Station</th><th>Title</th><th>Est. (min)</th><th>Order</th><th>Status</th><th>Actions</th></tr>
-              </thead>
-              <tbody>
-                {filtered.map(t => (
-                  <tr key={t.id} style={{ opacity: t.active ? 1 : 0.5 }}>
-                    <td style={{ color: 'var(--text-muted)' }}>{t.id}</td>
-                    <td style={{ color: 'var(--accent)' }}>{t.station_name}</td>
-                    <td style={{ fontWeight: 500 }}>{t.title}</td>
-                    <td>{t.estimated_minutes}</td>
-                    <td>{t.order_index}</td>
-                    <td><span className={`badge ${t.active ? 'badge-success' : 'badge-ghost'}`}>{t.active ? 'Active' : 'Inactive'}</span></td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => { setForm({ title: t.title, description: t.description || '', estimated_minutes: t.estimated_minutes, order_index: t.order_index }); setError(''); setEditTpl(t); }}>Edit</button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => toggleActive(t)}>{t.active ? 'Deactivate' : 'Activate'}</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        Object.entries(byStation).map(([stationName, tpls]) => (
+          <div key={stationName} style={{ marginBottom: 28 }}>
+            {/* Station header */}
+            <div style={{
+              fontSize: 11, fontWeight: 700, color: 'var(--accent)',
+              textTransform: 'uppercase', letterSpacing: '0.1em',
+              marginBottom: 8, padding: '0 2px',
+            }}>
+              ✈ {stationName}
+            </div>
+            <div className="card" style={{ padding: 0 }}>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 90 }}>Op #</th>
+                      <th>Title</th>
+                      <th style={{ width: 70 }}>Est.</th>
+                      <th style={{ width: 100 }}>Attributes</th>
+                      <th style={{ width: 80 }}>Status</th>
+                      <th style={{ width: 130 }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tpls.map(t => (
+                      t.is_section_header ? (
+                        /* Section header row */
+                        <tr key={t.id} style={{ background: 'rgba(79,142,247,0.07)' }}>
+                          <td>
+                            {t.op_number && (
+                              <code style={{ fontSize: 11, color: 'var(--accent)' }}>{t.op_number}</code>
+                            )}
+                          </td>
+                          <td colSpan={3}>
+                            <span style={{ fontWeight: 700, fontSize: 13 }}>▸ {t.title}</span>
+                            <span className="badge" style={{
+                              marginLeft: 10, fontSize: 9, background: 'rgba(79,142,247,0.15)',
+                              color: 'var(--accent)', border: '1px solid var(--accent)',
+                            }}>SECTION</span>
+                          </td>
+                          <td>
+                            <span className={`badge ${t.active ? 'badge-success' : 'badge-ghost'}`} style={{ fontSize: 10 }}>
+                              {t.active ? 'Active' : 'Off'}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openEdit(t)}>Edit</button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => toggleActive(t)}>
+                                {t.active ? 'Off' : 'On'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        /* Regular task row */
+                        <tr key={t.id} style={{ opacity: t.active ? 1 : 0.45 }}>
+                          <td>
+                            {t.op_number
+                              ? <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{t.op_number}</code>
+                              : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>#{t.id}</span>
+                            }
+                          </td>
+                          <td style={{ fontWeight: 500 }}>
+                            {t.title}
+                            {t.drawing_reference && (
+                              <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                                [{t.drawing_reference}]
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{t.estimated_minutes}m</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                              {t.requires_serial_number && (
+                                <span className="badge badge-warning" style={{ fontSize: 9 }}>S/N REQ</span>
+                              )}
+                              {Array.isArray(t.kits_required) && t.kits_required.length > 0 && (
+                                <span className="badge badge-ghost" style={{ fontSize: 9 }}>
+                                  {t.kits_required.length} kit{t.kits_required.length !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                              {Array.isArray(t.image_urls) && t.image_urls.length > 0 && (
+                                <span className="badge badge-ghost" style={{ fontSize: 9 }}>
+                                  {t.image_urls.length} img{t.image_urls.length !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`badge ${t.active ? 'badge-success' : 'badge-ghost'}`} style={{ fontSize: 10 }}>
+                              {t.active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openEdit(t)}>Edit</button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => toggleActive(t)}>
+                                {t.active ? 'Deactivate' : 'Activate'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ))
+      )}
+
+      {/* Create modal */}
+      {showCreate && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal" style={{ maxWidth: 660, width: '95vw' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">New Task Template</div>
+            <TemplateForm onSubmit={handleCreate} />
           </div>
         </div>
       )}
-      {showCreate && <div className="modal-overlay" onClick={() => setCreate(false)}><div className="modal" onClick={e => e.stopPropagation()}><div className="modal-title">New Task Template</div><TemplateForm onSubmit={handleCreate} /></div></div>}
-      {editTpl  && <div className="modal-overlay" onClick={() => setEditTpl(null)}><div className="modal" onClick={e => e.stopPropagation()}><div className="modal-title">Edit Template</div><TemplateForm onSubmit={handleUpdate} /></div></div>}
+
+      {/* Edit modal */}
+      {editTpl && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal" style={{ maxWidth: 660, width: '95vw' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">
+              Edit Template
+              {editTpl.op_number && <span style={{ marginLeft: 10, fontFamily: 'monospace', fontSize: 14, color: 'var(--accent)' }}>{editTpl.op_number}</span>}
+            </div>
+            <TemplateForm onSubmit={handleUpdate} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Audit Tab ────────────────────────────────────────────────────────────────
 function AuditTab() {
-  const [log, setLog]           = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [filters, setFilters]   = useState({ from_date: '', to_date: '', type: '' });
+  const [log, setLog]         = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({ from_date: '', to_date: '', type: '' });
 
   useEffect(() => { load(); }, []);
 

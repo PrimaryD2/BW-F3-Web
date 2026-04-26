@@ -80,15 +80,29 @@ router.put('/users/:id', async (req, res) => {
 
 // ─── Task Templates ───────────────────────────────────────────────────────────
 
+// Parse JSON text columns returned by MariaDB back into JS arrays/booleans.
+function parseTpl(t) {
+  return {
+    ...t,
+    kits_required:          t.kits_required  ? JSON.parse(t.kits_required)  : [],
+    image_urls:             t.image_urls     ? JSON.parse(t.image_urls)     : [],
+    is_section_header:      Boolean(t.is_section_header),
+    requires_serial_number: Boolean(t.requires_serial_number),
+  };
+}
+
 // GET /api/admin/task-templates
 router.get('/task-templates', async (req, res) => {
   try {
     const rows = await query(
       `SELECT tt.*, s.name AS station_name FROM task_templates tt
        JOIN stations s ON tt.station_id = s.id
-       ORDER BY tt.station_id, tt.order_index`
+       ORDER BY tt.station_id,
+                CASE WHEN tt.op_number IS NULL THEN 1 ELSE 0 END,
+                tt.op_number,
+                tt.order_index`
     );
-    res.json(rows);
+    res.json(rows.map(parseTpl));
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -98,10 +112,13 @@ router.get('/task-templates', async (req, res) => {
 router.get('/task-templates/station/:stationId', async (req, res) => {
   try {
     const rows = await query(
-      'SELECT * FROM task_templates WHERE station_id = ? ORDER BY order_index',
+      `SELECT tt.*, s.name AS station_name FROM task_templates tt
+       JOIN stations s ON tt.station_id = s.id
+       WHERE tt.station_id = ?
+       ORDER BY CASE WHEN tt.op_number IS NULL THEN 1 ELSE 0 END, tt.op_number, tt.order_index`,
       [req.params.stationId]
     );
-    res.json(rows);
+    res.json(rows.map(parseTpl));
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -109,35 +126,62 @@ router.get('/task-templates/station/:stationId', async (req, res) => {
 
 // POST /api/admin/task-templates
 router.post('/task-templates', async (req, res) => {
-  const { station_id, title, description, estimated_minutes = 60, order_index = 0 } = req.body;
+  const {
+    station_id, title, description, estimated_minutes = 60, order_index = 0,
+    op_number, is_section_header = false, kits_required = [],
+    drawing_reference, instructions, requires_serial_number = false, image_urls = [],
+  } = req.body;
   if (!station_id || !title) return res.status(400).json({ error: 'station_id and title required' });
   try {
     const result = await query(
-      'INSERT INTO task_templates (station_id, title, description, estimated_minutes, order_index) VALUES (?,?,?,?,?)',
-      [station_id, title, description || null, estimated_minutes, order_index]
+      `INSERT INTO task_templates
+         (station_id, title, description, estimated_minutes, order_index,
+          op_number, is_section_header, kits_required, drawing_reference,
+          instructions, requires_serial_number, image_urls)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        station_id, title, description || null, estimated_minutes, order_index,
+        op_number || null, is_section_header ? 1 : 0,
+        JSON.stringify(kits_required),
+        drawing_reference || null, instructions || null,
+        requires_serial_number ? 1 : 0,
+        JSON.stringify(image_urls),
+      ]
     );
     const t = await query(
       `SELECT tt.*, s.name AS station_name FROM task_templates tt
        JOIN stations s ON tt.station_id = s.id WHERE tt.id = ?`,
       [result.insertId]
     );
-    res.status(201).json(t[0]);
+    res.status(201).json(parseTpl(t[0]));
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // PUT /api/admin/task-templates/:id
 router.put('/task-templates/:id', async (req, res) => {
-  const { title, description, estimated_minutes, order_index, active } = req.body;
+  const {
+    title, description, estimated_minutes, order_index, active,
+    op_number, is_section_header, kits_required, drawing_reference,
+    instructions, requires_serial_number, image_urls,
+  } = req.body;
   try {
     const fields = [];
     const params = [];
-    if (title !== undefined) { fields.push('title = ?'); params.push(title); }
-    if (description !== undefined) { fields.push('description = ?'); params.push(description); }
-    if (estimated_minutes !== undefined) { fields.push('estimated_minutes = ?'); params.push(estimated_minutes); }
-    if (order_index !== undefined) { fields.push('order_index = ?'); params.push(order_index); }
-    if (active !== undefined) { fields.push('active = ?'); params.push(active ? 1 : 0); }
+    if (title              !== undefined) { fields.push('title = ?');               params.push(title); }
+    if (description        !== undefined) { fields.push('description = ?');         params.push(description); }
+    if (estimated_minutes  !== undefined) { fields.push('estimated_minutes = ?');   params.push(estimated_minutes); }
+    if (order_index        !== undefined) { fields.push('order_index = ?');         params.push(order_index); }
+    if (active             !== undefined) { fields.push('active = ?');              params.push(active ? 1 : 0); }
+    if (op_number          !== undefined) { fields.push('op_number = ?');           params.push(op_number || null); }
+    if (is_section_header  !== undefined) { fields.push('is_section_header = ?');  params.push(is_section_header ? 1 : 0); }
+    if (kits_required      !== undefined) { fields.push('kits_required = ?');      params.push(JSON.stringify(kits_required)); }
+    if (drawing_reference  !== undefined) { fields.push('drawing_reference = ?');  params.push(drawing_reference || null); }
+    if (instructions       !== undefined) { fields.push('instructions = ?');        params.push(instructions || null); }
+    if (requires_serial_number !== undefined) { fields.push('requires_serial_number = ?'); params.push(requires_serial_number ? 1 : 0); }
+    if (image_urls         !== undefined) { fields.push('image_urls = ?');          params.push(JSON.stringify(image_urls)); }
     if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
     params.push(req.params.id);
     await query(`UPDATE task_templates SET ${fields.join(', ')} WHERE id = ?`, params);
@@ -146,8 +190,9 @@ router.put('/task-templates/:id', async (req, res) => {
        JOIN stations s ON tt.station_id = s.id WHERE tt.id = ?`,
       [req.params.id]
     );
-    res.json(updated[0]);
+    res.json(parseTpl(updated[0]));
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });

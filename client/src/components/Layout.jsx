@@ -1,15 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getAirplanes, getStations } from '../api';
 
 const NAV_ITEMS = [
-  { to: '/',           label: 'Dashboard',   icon: '⬛', exact: true },
-  { to: '/airplanes',  label: 'Airplanes',   icon: '✈' },
-  { to: '/ncr',        label: 'NCR',         icon: '⚠' },
-  { to: '/statistics', label: 'Statistics',  icon: '📊' },
+  { to: '/',           label: 'Dashboard',  icon: '⬛', exact: true },
+  { to: '/airplanes',  label: 'Airplanes',  icon: '✈' },
+  { to: '/ncr',        label: 'NCR',        icon: '⚠' },
+  { to: '/statistics', label: 'Statistics', icon: '📊' },
 ];
-
-const STATION_NAMES = ['F3-Prep', 'F3-S1', 'F3-S2', 'F3-S3a', 'F3-S3B', 'F3-S4'];
 
 const ROLE_COLORS = { admin: 'var(--danger)', supervisor: 'var(--warning)', worker: 'var(--success)' };
 
@@ -18,9 +17,42 @@ export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // Quick-nav data
+  const [stations, setStations]       = useState([]);
+  const [activePlanes, setActivePlanes] = useState([]);
+  // stationPicker: null | { stationId, stationName }
+  const [stationPicker, setStationPicker] = useState(null);
+
+  useEffect(() => {
+    Promise.all([
+      getStations(),
+      getAirplanes({ status: 'in_progress' }),
+    ]).then(([sRes, pRes]) => {
+      setStations(sRes.data);
+      setActivePlanes(pRes.data);
+    }).catch(() => {}); // sidebar loads regardless of data fetch outcome
+  }, []);
+
   function handleLogout() {
     logout();
     navigate('/login');
+  }
+
+  function handleStationClick(station) {
+    if (activePlanes.length === 0) return; // no active projects — do nothing
+    if (activePlanes.length === 1) {
+      navigate(`/airplanes/${activePlanes[0].id}/station/${station.id}`);
+      setSidebarOpen(false);
+      return;
+    }
+    // Multiple active projects — let user pick
+    setStationPicker({ stationId: station.id, stationName: station.name });
+  }
+
+  function pickPlane(planeId) {
+    navigate(`/airplanes/${planeId}/station/${stationPicker.stationId}`);
+    setStationPicker(null);
+    setSidebarOpen(false);
   }
 
   const navLinkStyle = ({ isActive }) => ({
@@ -59,26 +91,60 @@ export default function Layout() {
 
       {/* Quick station nav */}
       <div style={{ marginBottom: 'auto' }}>
-        <div style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 4px', marginBottom: '8px' }}>
-          Quick Nav — Stations
+        <div style={{
+          fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)',
+          textTransform: 'uppercase', letterSpacing: '0.08em',
+          padding: '0 4px', marginBottom: '6px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span>Quick Nav — Stations</span>
+          {activePlanes.length > 0 && (
+            <span style={{ color: 'var(--accent)', fontSize: '9px' }}>
+              {activePlanes.length} active
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          {STATION_NAMES.map(name => (
-            <button
-              key={name}
-              onClick={() => navigate('/airplanes')}
-              style={{
-                background: 'transparent', border: 'none', color: 'var(--text-muted)',
-                textAlign: 'left', padding: '6px 16px', borderRadius: '6px', fontSize: '12px',
-                cursor: 'pointer', transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => { e.target.style.background = 'var(--bg-hover)'; e.target.style.color = 'var(--text-primary)'; }}
-              onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = 'var(--text-muted)'; }}
-            >
-              {name}
-            </button>
-          ))}
+          {stations.length === 0 ? (
+            // Fallback while data loads
+            ['F3-Prep','F3-S1','F3-S2','F3-S3a','F3-S3B','F3-S4'].map(name => (
+              <div key={name} style={{ padding: '6px 16px', fontSize: '12px', color: 'var(--text-muted)', opacity: 0.4 }}>
+                {name}
+              </div>
+            ))
+          ) : (
+            stations.map(station => (
+              <button
+                key={station.id}
+                onClick={() => handleStationClick(station)}
+                disabled={activePlanes.length === 0}
+                style={{
+                  background: 'transparent', border: 'none',
+                  color: activePlanes.length === 0 ? 'var(--text-muted)' : 'var(--text-secondary)',
+                  textAlign: 'left', padding: '6px 16px', borderRadius: '6px',
+                  fontSize: '12px', cursor: activePlanes.length === 0 ? 'default' : 'pointer',
+                  transition: 'all 0.15s', opacity: activePlanes.length === 0 ? 0.4 : 1,
+                }}
+                onMouseEnter={e => {
+                  if (activePlanes.length === 0) return;
+                  e.target.style.background = 'var(--bg-hover)';
+                  e.target.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.target.style.background = 'transparent';
+                  e.target.style.color = activePlanes.length === 0 ? 'var(--text-muted)' : 'var(--text-secondary)';
+                }}
+              >
+                {station.name}
+              </button>
+            ))
+          )}
         </div>
+        {activePlanes.length === 0 && stations.length > 0 && (
+          <div style={{ padding: '4px 16px', fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+            No active projects
+          </div>
+        )}
       </div>
 
       {/* User info */}
@@ -92,8 +158,12 @@ export default function Layout() {
             {user?.name?.charAt(0).toUpperCase()}
           </div>
           <div style={{ overflow: 'hidden' }}>
-            <div style={{ fontSize: '13px', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.name}</div>
-            <div style={{ fontSize: '11px', color: ROLE_COLORS[user?.role] || 'var(--text-muted)', textTransform: 'capitalize' }}>{user?.role}</div>
+            <div style={{ fontSize: '13px', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {user?.name}
+            </div>
+            <div style={{ fontSize: '11px', color: ROLE_COLORS[user?.role] || 'var(--text-muted)', textTransform: 'capitalize' }}>
+              {user?.role}
+            </div>
           </div>
         </div>
         <button
@@ -149,6 +219,41 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Airplane picker — shown when a station is clicked and there are multiple active projects */}
+      {stationPicker && (
+        <div
+          className="modal-overlay"
+          onClick={() => setStationPicker(null)}
+        >
+          <div
+            className="modal"
+            style={{ maxWidth: 340 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="modal-title">Select Airplane — {stationPicker.stationName}</div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
+              Multiple active projects found. Which airplane are you working on?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {activePlanes.map(plane => (
+                <button
+                  key={plane.id}
+                  className="btn btn-ghost"
+                  style={{ justifyContent: 'flex-start', gap: 12 }}
+                  onClick={() => pickPlane(plane.id)}
+                >
+                  <span style={{ fontWeight: 700 }}>{plane.serial_number}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{plane.model}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setStationPicker(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @media (max-width: 768px) {
