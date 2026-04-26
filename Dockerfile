@@ -1,31 +1,39 @@
 # ── Stage 1: Build the React client ───────────────────────────────────────────
 FROM node:20-alpine AS client-builder
-WORKDIR /build
 
-COPY client/package.json ./client/
-RUN cd client && npm install
+# Set working dir to the client folder so Vite runs in the right place
+WORKDIR /app/client
 
-COPY client/  ./client/
-COPY shared/  ./shared/
-RUN cd client && npm run build
+# Install deps (separate layer — cached unless package.json changes)
+COPY client/package.json ./
+RUN npm install
+
+# Copy the full client source, then build
+COPY client/ ./
+RUN npm run build
+# Output: /app/client/dist
 
 # ── Stage 2: Production server ─────────────────────────────────────────────────
 FROM node:20-alpine AS production
-WORKDIR /app
 
-COPY server/package.json ./server/
-RUN cd server && npm install --omit=dev
+WORKDIR /app/server
 
-COPY server/  ./server/
-COPY shared/  ./shared/
+# Install server production deps (cached layer)
+COPY server/package.json ./
+RUN npm install --omit=dev
 
-# Copy built React app from Stage 1
-COPY --from=client-builder /build/client/dist ./client/dist
+# Copy server source and shared constants
+COPY server/ ./
+COPY shared/ /app/shared/
 
+# Copy the built React app from stage 1
+COPY --from=client-builder /app/client/dist /app/client/dist
+
+# Ensure entrypoint is executable
 RUN chmod +x /app/server/docker-entrypoint.sh
 
 ENV NODE_ENV=production
 EXPOSE 3001
 
-WORKDIR /app/server
-ENTRYPOINT ["sh", "docker-entrypoint.sh"]
+# Entrypoint: waits for DB, runs migrate+seed, then starts Express
+ENTRYPOINT ["sh", "/app/server/docker-entrypoint.sh"]

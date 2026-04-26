@@ -1,20 +1,12 @@
-# Git
+# Git history
 .git
 .gitignore
 
-# Node modules (rebuilt inside Docker)
-node_modules
-server/node_modules
-client/node_modules
+# Node modules — rebuilt inside Docker, never send to build context
+**/node_modules
 
-# Client source — only the built dist is needed in the final image
-client/src
-client/public
-client/index.html
-client/vite.config.js
-
-# Dev / local config
-server/.env
+# Local secrets — never bake into the image
+**/.env
 .env
 *.env.local
 
@@ -22,10 +14,8 @@ server/.env
 *.log
 npm-debug.log*
 
-# OS
+# OS / editor noise
 .DS_Store
 Thumbs.db
-
-# Editor
 .vscode
 .idea
