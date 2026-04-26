@@ -5,6 +5,18 @@ const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 router.use(authenticateToken);
 
+// MariaDB returns COUNT(*)/SUM() as BigInt which JSON.stringify cannot handle.
+// Convert every BigInt value in a result set to a regular Number.
+function normalizeBigInt(rows) {
+  return rows.map(row => {
+    const out = {};
+    for (const [k, v] of Object.entries(row)) {
+      out[k] = typeof v === 'bigint' ? Number(v) : v;
+    }
+    return out;
+  });
+}
+
 function addDateFilter(conditions, params, field, from_date, to_date) {
   if (from_date) { conditions.push(`DATE(${field}) >= ?`); params.push(from_date); }
   if (to_date) { conditions.push(`DATE(${field}) <= ?`); params.push(to_date); }
@@ -32,7 +44,7 @@ router.get('/time-per-task', async (req, res) => {
        ORDER BY s.id, tt.order_index`,
       params
     );
-    res.json(rows);
+    res.json(normalizeBigInt(rows));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -70,7 +82,7 @@ router.get('/ncr-frequency', async (req, res) => {
       params
     );
 
-    res.json({ byStation, overTime });
+    res.json({ byStation: normalizeBigInt(byStation), overTime: normalizeBigInt(overTime) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -99,7 +111,7 @@ router.get('/loss-breakdown', async (req, res) => {
        ORDER BY total_minutes DESC`,
       params
     );
-    res.json(rows);
+    res.json(normalizeBigInt(rows));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -130,7 +142,7 @@ router.get('/throughput', async (req, res) => {
       params
     );
 
-    res.json({ weekly, monthly });
+    res.json({ weekly: normalizeBigInt(weekly), monthly: normalizeBigInt(monthly) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -140,10 +152,26 @@ router.get('/throughput', async (req, res) => {
 // GET /api/statistics/dashboard — quick summary for dashboard widgets
 router.get('/dashboard', async (req, res) => {
   try {
+    // Active airplanes in production
+    const activePlanes = await query(
+      `SELECT COUNT(*) AS active_airplanes FROM airplanes WHERE status = 'in_progress'`
+    );
+
     // Today's time logged
     const todayTime = await query(
       `SELECT COALESCE(SUM(duration_minutes),0) AS today_minutes
        FROM time_logs WHERE DATE(started_at) = CURDATE() AND ended_at IS NOT NULL`
+    );
+
+    // Open NCR count
+    const openNcrCount = await query(
+      `SELECT COUNT(*) AS open_ncr_count FROM nonconformity_reports WHERE status = 'open'`
+    );
+
+    // Today's loss time
+    const todayLoss = await query(
+      `SELECT COALESCE(SUM(duration_minutes),0) AS today_loss_minutes
+       FROM loss_logs WHERE DATE(logged_at) = CURDATE()`
     );
 
     // Loss reasons this week
@@ -167,9 +195,12 @@ router.get('/dashboard', async (req, res) => {
     );
 
     res.json({
-      today_minutes: parseFloat(todayTime[0].today_minutes) || 0,
-      week_loss: weekLoss,
-      open_ncrs: openNcrs,
+      active_airplanes:   Number(activePlanes[0].active_airplanes) || 0,
+      today_minutes:      Number(todayTime[0].today_minutes) || 0,
+      open_ncr_count:     Number(openNcrCount[0].open_ncr_count) || 0,
+      today_loss_minutes: Number(todayLoss[0].today_loss_minutes) || 0,
+      week_loss:          normalizeBigInt(weekLoss),
+      open_ncrs:          openNcrs,
     });
   } catch (err) {
     console.error(err);

@@ -20,9 +20,11 @@ router.get('/airplane/:airplaneId/station/:stationId', authenticateToken, async 
 
     // Check for existing instances
     let instances = await query(
-      `SELECT ti.*, tt.title, tt.description, tt.estimated_minutes, tt.order_index
+      `SELECT ti.*, tt.title, tt.description, tt.estimated_minutes, tt.order_index,
+              s.name AS station_name
        FROM task_instances ti
        JOIN task_templates tt ON ti.template_id = tt.id
+       JOIN stations s ON ti.station_id = s.id
        WHERE ti.airplane_id = ? AND ti.station_id = ?
        ORDER BY tt.order_index`,
       [airplaneId, stationId]
@@ -41,9 +43,11 @@ router.get('/airplane/:airplaneId/station/:stationId', authenticateToken, async 
         );
       }
       instances = await query(
-        `SELECT ti.*, tt.title, tt.description, tt.estimated_minutes, tt.order_index
+        `SELECT ti.*, tt.title, tt.description, tt.estimated_minutes, tt.order_index,
+                s.name AS station_name
          FROM task_instances ti
          JOIN task_templates tt ON ti.template_id = tt.id
+         JOIN stations s ON ti.station_id = s.id
          WHERE ti.airplane_id = ? AND ti.station_id = ?
          ORDER BY tt.order_index`,
         [airplaneId, stationId]

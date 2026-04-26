@@ -12,13 +12,17 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const { status, severity, station_id, airplane_id, serial_number, from_date, to_date } = req.query;
     let sql = `
-      SELECT ncr.*, u.name AS reporter_name, a.serial_number, s.name AS station_name,
-             ti.id AS task_instance_id
+      SELECT ncr.id, ncr.airplane_id, ncr.task_instance_id, ncr.station_id,
+             ncr.reported_by, ncr.description, ncr.severity, ncr.status,
+             ncr.resolution_notes, ncr.created_at, ncr.resolved_at,
+             u.name AS reporter_name, a.serial_number, s.name AS station_name,
+             tt.title AS task_title
       FROM nonconformity_reports ncr
       JOIN users u ON ncr.reported_by = u.id
       JOIN airplanes a ON ncr.airplane_id = a.id
       JOIN stations s ON ncr.station_id = s.id
       LEFT JOIN task_instances ti ON ncr.task_instance_id = ti.id
+      LEFT JOIN task_templates tt ON ti.template_id = tt.id
     `;
     const conditions = [];
     const params = [];

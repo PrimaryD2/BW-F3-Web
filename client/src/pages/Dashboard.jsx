@@ -88,10 +88,23 @@ export default function Dashboard() {
 
       {/* KPI cards */}
       <div className="grid-4" style={{ marginBottom: 24 }}>
-        <StatCard label="Active Airplanes" value={airplanes.length} color="var(--accent)" />
-        <StatCard label="Today's Time Logged" value={`${Math.round((stats?.today_minutes || 0))} min`} sub={`${Math.floor((stats?.today_minutes || 0) / 60)}h ${Math.round((stats?.today_minutes || 0) % 60)}m`} color="var(--success)" />
-        <StatCard label="Open NCRs" value={openNcrs.length} color={openNcrs.some(n => n.severity === 'high') ? 'var(--danger)' : 'var(--warning)'} />
-        <StatCard label="Loss Time This Week" value={`${Math.round(weekLoss.reduce((s, l) => s + parseFloat(l.total_minutes), 0))} min`} color="var(--warning)" />
+        <StatCard label="Active Airplanes" value={stats?.active_airplanes ?? airplanes.length} color="var(--accent)" />
+        <StatCard
+          label="Today's Time Logged"
+          value={`${Math.round(stats?.today_minutes || 0)} min`}
+          sub={`${Math.floor((stats?.today_minutes || 0) / 60)}h ${Math.round((stats?.today_minutes || 0) % 60)}m`}
+          color="var(--success)"
+        />
+        <StatCard
+          label="Open NCRs"
+          value={stats?.open_ncr_count ?? openNcrs.length}
+          color={openNcrs.some(n => n.severity === 'high') ? 'var(--danger)' : 'var(--warning)'}
+        />
+        <StatCard
+          label="Loss Time Today"
+          value={`${Math.round(stats?.today_loss_minutes || 0)} min`}
+          color="var(--warning)"
+        />
       </div>
 
       <div className="grid-2" style={{ marginBottom: 24 }}>
