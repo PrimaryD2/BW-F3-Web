@@ -4,6 +4,28 @@ import axios from 'axios';
 // and same-origin in production.
 const api = axios.create({ baseURL: '/api' });
 
+// Attach JWT to every request — axios.create() does NOT inherit changes made
+// to axios.defaults at runtime, so we use an interceptor on this instance.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('f3_token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// On 401 (expired/invalid token) clear storage and redirect to login.
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('f3_token');
+      localStorage.removeItem('f3_user');
+      localStorage.removeItem('f3_last_activity');
+      window.location.href = '/login';
+    }
+    return Promise.reject(err);
+  }
+);
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export const login           = (d) => api.post('/auth/login', d);
 export const getMe           = ()  => api.get('/auth/me');
