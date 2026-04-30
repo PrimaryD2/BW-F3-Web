@@ -10,7 +10,9 @@ export default function NCRList() {
   const [ncrs, setNcrs]         = useState([]);
   const [stations, setStations] = useState([]);
   const [loading, setLoading]   = useState(true);
-  const [filters, setFilters]   = useState({ status: '', severity: '', station_id: '', serial_number: '', from_date: '', to_date: '' });
+  const [filters, setFilters]   = useState({
+    status: '', severity: '', station_id: '', serial_number: '', from_date: '', to_date: '',
+  });
 
   useEffect(() => {
     getStations().then(r => setStations(r.data));
@@ -42,13 +44,21 @@ export default function NCRList() {
   }
 
   const hasFilters = Object.values(filters).some(v => v);
+  const safetyCount = ncrs.filter(n => n.is_safety_concern && n.status !== 'resolved').length;
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <div className="page-title">Nonconformity Reports</div>
-          <div className="page-subtitle">{ncrs.length} report{ncrs.length !== 1 ? 's' : ''}</div>
+          <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {ncrs.length} report{ncrs.length !== 1 ? 's' : ''}
+            {safetyCount > 0 && (
+              <span className="badge badge-danger" style={{ fontSize: 11 }}>
+                ⚠ {safetyCount} safety issue{safetyCount !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -111,29 +121,58 @@ export default function NCRList() {
             <table>
               <thead>
                 <tr>
-                  <th>#</th>
-                  <th>Aircraft</th>
+                  <th style={{ width: 50 }}>#</th>
+                  <th style={{ width: 110 }}>Aircraft</th>
                   <th>Station</th>
-                  <th>Severity</th>
-                  <th>Status</th>
+                  <th style={{ width: 75 }}>Severity</th>
+                  <th style={{ width: 100 }}>Status</th>
                   <th>Description</th>
-                  <th>Reporter</th>
-                  <th>Date</th>
+                  <th style={{ width: 140 }}>Reporter</th>
+                  <th style={{ width: 95 }}>Date</th>
                 </tr>
               </thead>
               <tbody>
                 {ncrs.map(n => (
-                  <tr key={n.id} onClick={() => navigate(`/ncr/${n.id}`)} style={{ cursor: 'pointer' }}>
+                  <tr
+                    key={n.id}
+                    onClick={() => navigate(`/ncr/${n.id}`)}
+                    style={{
+                      cursor: 'pointer',
+                      background: n.is_safety_concern && n.status !== 'resolved'
+                        ? 'rgba(239,68,68,0.04)' : undefined,
+                    }}
+                  >
                     <td style={{ fontWeight: 700, color: 'var(--accent)' }}>#{n.id}</td>
-                    <td style={{ fontWeight: 600 }}>{n.serial_number}</td>
-                    <td>{n.station_name}</td>
-                    <td><span className={`badge ${SEV_BADGE[n.severity]}`}>{n.severity}</span></td>
+                    <td style={{ fontWeight: 600 }}>
+                      {n.serial_number}
+                    </td>
+                    <td style={{ fontSize: 12 }}>{n.station_name}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <span className={`badge ${SEV_BADGE[n.severity]}`}>{n.severity}</span>
+                        {n.is_safety_concern && (
+                          <span className="badge badge-danger" style={{ fontSize: 9 }}>⚠ safety</span>
+                        )}
+                      </div>
+                    </td>
                     <td><span className={`badge ${STAT_BADGE[n.status]}`}>{n.status.replace(/_/g, ' ')}</span></td>
-                    <td style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 12 }}>
+                    <td style={{
+                      maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: 12,
+                    }}>
                       {n.description}
                     </td>
-                    <td style={{ fontSize: 12 }}>{n.reporter_name}</td>
-                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(n.created_at).toLocaleDateString()}</td>
+                    <td style={{ fontSize: 12 }}>
+                      <div>{n.full_name || n.reporter_name}</div>
+                      {n.part_assembly_number && (
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                          {n.part_assembly_number}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {new Date(n.created_at).toLocaleDateString()}
+                    </td>
                   </tr>
                 ))}
               </tbody>

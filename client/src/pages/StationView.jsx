@@ -240,7 +240,7 @@ export default function StationView() {
                 key={task.id}
                 style={{
                   background: STATUS_BG[task.status],
-                  border: `1px solid ${task.blocked_by_ncr ? 'var(--danger)' : STATUS_COLOR[task.status]}`,
+                  border: `1px solid ${STATUS_COLOR[task.status]}`,
                   borderRadius: 10, overflow: 'hidden',
                   opacity: unlocked ? 1 : 0.5,
                   transition: 'opacity 0.2s',
@@ -272,7 +272,6 @@ export default function StationView() {
                       <span style={{ fontSize: 11, fontWeight: 700, color: STATUS_COLOR[task.status], textTransform: 'uppercase' }}>
                         {task.status.replace(/_/g, ' ')}
                       </span>
-                      {task.blocked_by_ncr && <span className="badge badge-danger" style={{ fontSize: 10 }}>BLOCKED</span>}
                       {!unlocked && <span className="badge badge-ghost" style={{ fontSize: 10 }}>LOCKED</span>}
                       {task.requires_serial_number && !task.installed_part_serial && (
                         <span className="badge badge-warning" style={{ fontSize: 10 }}>S/N NEEDED</span>
@@ -427,9 +426,7 @@ export default function StationView() {
                           </button>
                         )}
 
-                        {task.blocked_by_ncr ? (
-                          <span style={{ fontSize: 12, color: 'var(--danger)' }}>🔒 Blocked by open High NCR</span>
-                        ) : signoffAction?.serialMissing ? (
+                        {signoffAction?.serialMissing ? (
                           <span style={{ fontSize: 12, color: 'var(--warning)' }}>
                             ⚠ Enter part serial number to unlock sign-off
                           </span>
@@ -530,6 +527,7 @@ export default function StationView() {
       {ncrModal && (
         <NCRModal
           airplaneId={parseInt(airplaneId)}
+          airplaneSerial={airplane?.serial_number}
           stationId={parseInt(stationId)}
           taskInstanceId={ncrModal.taskId}
           onClose={() => setNcrModal(null)}

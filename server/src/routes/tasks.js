@@ -100,7 +100,6 @@ router.get('/airplane/:airplaneId/station/:stationId', authenticateToken, async 
         my_active_timer:  activeTimer.length > 0 ? activeTimer[0] : null,
         signoffs,
         ncrs,
-        blocked_by_ncr:   ncrs.some(n => n.severity === 'high'),
       };
     }));
 
@@ -180,16 +179,6 @@ router.post('/:id/signoff', authenticateToken, async (req, res) => {
     const rows = await query('SELECT * FROM task_instances WHERE id = ?', [req.params.id]);
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'Task not found' });
     const task = rows[0];
-
-    // Block if high-severity unresolved NCR exists
-    const blocking = await query(
-      `SELECT COUNT(*) AS cnt FROM nonconformity_reports
-       WHERE task_instance_id = ? AND severity = 'high' AND status != 'resolved'`,
-      [req.params.id]
-    );
-    if (Number(blocking[0].cnt) > 0) {
-      return res.status(409).json({ error: 'Task blocked by a high-severity NCR. Resolve it before signing off.' });
-    }
 
     // For primary sign-off: validate serial number if required by template
     if (signature_type === 'primary') {

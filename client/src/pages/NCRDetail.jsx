@@ -62,9 +62,14 @@ export default function NCRDetail() {
             NCR #{ncr.id}
             <span className={`badge ${SEV_BADGE[ncr.severity]}`}>{ncr.severity}</span>
             <span className={`badge ${STAT_BADGE[ncr.status]}`}>{ncr.status.replace(/_/g, ' ')}</span>
+            {ncr.is_safety_concern && (
+              <span className="badge badge-danger" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                ⚠ Safety Issue
+              </span>
+            )}
           </div>
           <div className="page-subtitle">
-            {ncr.serial_number} · {ncr.station_name} · Reported by {ncr.reporter_name}
+            {ncr.serial_number} · {ncr.station_name} · Reported by {ncr.full_name || ncr.reporter_name}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -75,16 +80,40 @@ export default function NCRDetail() {
         </div>
       </div>
 
+      {/* Safety concern banner */}
+      {ncr.is_safety_concern && (
+        <div style={{
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+          borderRadius: 8, padding: '12px 18px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <span style={{ fontSize: 20 }}>⚠</span>
+          <div>
+            <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: 13 }}>Safety Issue Flagged</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+              The reporter suspects this nonconformity may affect airworthiness or personnel safety. Supervisor attention required.
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid-2">
         {/* Details */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card">
             <div className="card-title" style={{ marginBottom: 14 }}>Details</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-              <Row label="Aircraft"   value={`${ncr.serial_number} (${ncr.model})`} />
-              <Row label="Station"    value={ncr.station_name} />
-              <Row label="Reported by" value={ncr.reporter_name} />
-              <Row label="Created"    value={new Date(ncr.created_at).toLocaleString()} />
+              <Row label="Reported By"    value={ncr.full_name || ncr.reporter_name} />
+              <Row label="Account"        value={ncr.reporter_name} />
+              <Row label="Aircraft"       value={`${ncr.serial_number}${ncr.model ? ` (${ncr.model})` : ''}`} />
+              <Row label="Station"        value={ncr.station_name} />
+              {ncr.part_assembly_number && (
+                <Row label="Part / Assembly" value={ncr.part_assembly_number} mono />
+              )}
+              {ncr.drawing_number && (
+                <Row label="Drawing No."  value={ncr.drawing_number} mono />
+              )}
+              <Row label="Created"        value={new Date(ncr.created_at).toLocaleString()} />
               {ncr.resolved_at && <Row label="Resolved" value={new Date(ncr.resolved_at).toLocaleString()} />}
             </div>
           </div>
@@ -112,7 +141,7 @@ export default function NCRDetail() {
               {/* Created entry */}
               <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}>
                 <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>{new Date(ncr.created_at).toLocaleString()}</div>
-                <div style={{ fontWeight: 600 }}>NCR filed by {ncr.reporter_name}</div>
+                <div style={{ fontWeight: 600 }}>NCR filed by {ncr.full_name || ncr.reporter_name}</div>
               </div>
               {ncr.approvals.map(a => (
                 <div key={a.id} style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}>
@@ -162,11 +191,13 @@ export default function NCRDetail() {
   );
 }
 
-function Row({ label, value }) {
+function Row({ label, value, mono }) {
   return (
     <div style={{ display: 'flex', gap: 8 }}>
-      <span style={{ color: 'var(--text-muted)', minWidth: 100 }}>{label}</span>
-      <span style={{ fontWeight: 500 }}>{value}</span>
+      <span style={{ color: 'var(--text-muted)', minWidth: 120, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontWeight: 500, fontFamily: mono ? 'monospace' : undefined, fontSize: mono ? 12 : undefined }}>
+        {value}
+      </span>
     </div>
   );
 }

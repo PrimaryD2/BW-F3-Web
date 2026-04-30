@@ -128,6 +128,11 @@ const ALTER_STMTS = [
   `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS image_urls TEXT NULL`,
   // Installed part traceability on task instances
   `ALTER TABLE task_instances ADD COLUMN IF NOT EXISTS installed_part_serial VARCHAR(100) NULL`,
+  // NCR enrichment fields
+  `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS full_name VARCHAR(100) NULL`,
+  `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS part_assembly_number VARCHAR(100) NULL`,
+  `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS drawing_number VARCHAR(100) NULL`,
+  `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS is_safety_concern BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
 async function migrate() {
