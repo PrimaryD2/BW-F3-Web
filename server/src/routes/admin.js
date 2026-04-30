@@ -81,6 +81,7 @@ router.put('/users/:id', async (req, res) => {
 // ─── Task Templates ───────────────────────────────────────────────────────────
 
 // Parse JSON text columns returned by MariaDB back into JS arrays/booleans.
+// Also normalise BigInt aggregates and include the average actual time.
 function parseTpl(t) {
   return {
     ...t,
@@ -88,22 +89,41 @@ function parseTpl(t) {
     image_urls:             t.image_urls     ? JSON.parse(t.image_urls)     : [],
     is_section_header:      Boolean(t.is_section_header),
     requires_serial_number: Boolean(t.requires_serial_number),
+    // avg_actual_minutes: average minutes per completed task instance (null = no data yet)
+    avg_actual_minutes:     t.avg_actual_minutes != null ? Math.round(Number(t.avg_actual_minutes)) : null,
+    completed_count:        Number(t.completed_count) || 0,
   };
 }
+
+// Subquery fragments that add avg actual time and completion count per template.
+const AVG_SUBQUERY = `
+  ROUND((
+    SELECT AVG(s.mins) FROM (
+      SELECT SUM(tl.duration_minutes) AS mins
+      FROM time_logs tl
+      JOIN task_instances ti2 ON tl.task_instance_id = ti2.id
+      WHERE ti2.template_id = tt.id AND tl.ended_at IS NOT NULL
+      GROUP BY tl.task_instance_id
+    ) s
+  ), 0) AS avg_actual_minutes,
+  (SELECT COUNT(*) FROM task_instances ti3
+   WHERE ti3.template_id = tt.id AND ti3.status = 'double_signed') AS completed_count
+`;
 
 // GET /api/admin/task-templates
 router.get('/task-templates', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT tt.*, s.name AS station_name FROM task_templates tt
+      `SELECT tt.*, s.name AS station_name, ${AVG_SUBQUERY}
+       FROM task_templates tt
        JOIN stations s ON tt.station_id = s.id
        ORDER BY tt.station_id,
                 CASE WHEN tt.op_number IS NULL THEN 1 ELSE 0 END,
-                tt.op_number,
-                tt.order_index`
+                tt.op_number, tt.order_index`
     );
     res.json(rows.map(parseTpl));
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -112,7 +132,8 @@ router.get('/task-templates', async (req, res) => {
 router.get('/task-templates/station/:stationId', async (req, res) => {
   try {
     const rows = await query(
-      `SELECT tt.*, s.name AS station_name FROM task_templates tt
+      `SELECT tt.*, s.name AS station_name, ${AVG_SUBQUERY}
+       FROM task_templates tt
        JOIN stations s ON tt.station_id = s.id
        WHERE tt.station_id = ?
        ORDER BY CASE WHEN tt.op_number IS NULL THEN 1 ELSE 0 END, tt.op_number, tt.order_index`,
