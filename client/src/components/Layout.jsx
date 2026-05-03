@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getAirplanes, getStations } from '../api';
+import { getAirplanes } from '../api';
+
+const STATUS_DOT = {
+  draft:      'var(--text-muted)',
+  in_progress: 'var(--accent)',
+  qc_review:  'var(--warning)',
+};
 
 const NAV_ITEMS = [
   { to: '/',           label: 'Dashboard',  icon: '⬛', exact: true },
@@ -18,21 +24,13 @@ export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Quick-nav data
-  const [stations, setStations]       = useState([]);
+  // Quick-nav data — active projects only
   const [activePlanes, setActivePlanes] = useState([]);
-  // stationPicker: null | { stationId, stationName }
-  const [stationPicker, setStationPicker] = useState(null);
 
   useEffect(() => {
-    Promise.all([
-      getStations(),
-      getAirplanes(), // fetch all, filter to non-completed client-side
-    ]).then(([sRes, pRes]) => {
-      setStations(sRes.data);
-      // "Active" = anything not yet completed (draft, in_progress, qc_review)
-      setActivePlanes((pRes.data || []).filter(p => p.status !== 'completed'));
-    }).catch(() => {}); // sidebar loads regardless of data fetch outcome
+    getAirplanes()
+      .then(res => setActivePlanes((res.data || []).filter(p => p.status !== 'completed')))
+      .catch(() => {});
   }, []);
 
   function handleLogout() {
@@ -40,20 +38,8 @@ export default function Layout() {
     navigate('/login');
   }
 
-  function handleStationClick(station) {
-    if (activePlanes.length === 0) return; // no active projects — do nothing
-    if (activePlanes.length === 1) {
-      navigate(`/airplanes/${activePlanes[0].id}/station/${station.id}`);
-      setSidebarOpen(false);
-      return;
-    }
-    // Multiple active projects — let user pick
-    setStationPicker({ stationId: station.id, stationName: station.name });
-  }
-
-  function pickPlane(planeId) {
-    navigate(`/airplanes/${planeId}/station/${stationPicker.stationId}`);
-    setStationPicker(null);
+  function handlePlaneClick(planeId) {
+    navigate(`/airplanes/${planeId}`);
     setSidebarOpen(false);
   }
 
