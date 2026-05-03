@@ -96,16 +96,17 @@ function parseTpl(t) {
 }
 
 // Subquery fragments that add avg actual time and completion count per template.
+// Uses a flat correlated subquery (no derived table) so MariaDB allows the
+// outer-query reference to tt.id.
+// AVG(sum_per_instance) = SUM(all durations) / COUNT(DISTINCT instances) — equivalent.
 const AVG_SUBQUERY = `
-  ROUND((
-    SELECT AVG(s.mins) FROM (
-      SELECT SUM(tl.duration_minutes) AS mins
-      FROM time_logs tl
-      JOIN task_instances ti2 ON tl.task_instance_id = ti2.id
-      WHERE ti2.template_id = tt.id AND tl.ended_at IS NOT NULL
-      GROUP BY tl.task_instance_id
-    ) s
-  ), 0) AS avg_actual_minutes,
+  (SELECT ROUND(
+     SUM(tl.duration_minutes) / NULLIF(COUNT(DISTINCT tl.task_instance_id), 0)
+   , 0)
+   FROM time_logs tl
+   JOIN task_instances ti2 ON tl.task_instance_id = ti2.id
+   WHERE ti2.template_id = tt.id AND tl.ended_at IS NOT NULL
+  ) AS avg_actual_minutes,
   (SELECT COUNT(*) FROM task_instances ti3
    WHERE ti3.template_id = tt.id AND ti3.status = 'double_signed') AS completed_count
 `;

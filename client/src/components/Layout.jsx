@@ -26,10 +26,11 @@ export default function Layout() {
   useEffect(() => {
     Promise.all([
       getStations(),
-      getAirplanes({ status: 'in_progress' }),
+      getAirplanes(), // fetch all, filter to non-completed client-side
     ]).then(([sRes, pRes]) => {
       setStations(sRes.data);
-      setActivePlanes(pRes.data);
+      // "Active" = anything not yet completed (draft, in_progress, qc_review)
+      setActivePlanes((pRes.data || []).filter(p => p.status !== 'completed'));
     }).catch(() => {}); // sidebar loads regardless of data fetch outcome
   }, []);
 
