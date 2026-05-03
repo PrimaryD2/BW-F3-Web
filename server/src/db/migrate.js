@@ -221,6 +221,33 @@ CREATE TABLE IF NOT EXISTS fleet_aircraft_config (
   FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
   FOREIGN KEY (option_id)   REFERENCES fleet_config_options(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS fleet_service_templates (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  category        VARCHAR(50)  NOT NULL DEFAULT 'General',
+  title           VARCHAR(200) NOT NULL,
+  interval_hours  INT          NULL,
+  interval_months INT          NULL,
+  description     TEXT         NULL,
+  sort_order      INT          NOT NULL DEFAULT 0,
+  active          BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fleet_service_records (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id          INT          NOT NULL,
+  template_id          INT          NOT NULL,
+  completed_date       DATE         NOT NULL,
+  hours_at_completion  DECIMAL(8,2) NULL,
+  signed_by            VARCHAR(100) NOT NULL,
+  notes                TEXT         NULL,
+  logged_by            INT          NULL,
+  created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (template_id) REFERENCES fleet_service_templates(id) ON DELETE CASCADE,
+  FOREIGN KEY (logged_by)   REFERENCES users(id)           ON DELETE SET NULL
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.

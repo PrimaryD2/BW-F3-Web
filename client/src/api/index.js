@@ -91,6 +91,14 @@ export const createFleetConfigOption = (d)       => api.post('/fleet/config-opti
 export const updateFleetConfigOption = (oid, d)  => api.put(`/fleet/config-options/${oid}`, d);
 export const deleteFleetConfigOption = (oid)     => api.delete(`/fleet/config-options/${oid}`);
 
+export const getFleetServiceTemplates   = ()         => api.get('/fleet/service-templates');
+export const createFleetServiceTemplate = (d)        => api.post('/fleet/service-templates', d);
+export const updateFleetServiceTemplate = (tid, d)   => api.put(`/fleet/service-templates/${tid}`, d);
+export const deleteFleetServiceTemplate = (tid)      => api.delete(`/fleet/service-templates/${tid}`);
+export const completeFleetService       = (id, d)    => api.post(`/fleet/${id}/services`, d);
+export const deleteFleetServiceRecord   = (id, rid)  => api.delete(`/fleet/${id}/services/${rid}`);
+export const getFleetUpcomingServices   = ()         => api.get('/fleet/upcoming-services');
+
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
 export const deleteFleetContact = (id, cid)     => api.delete(`/fleet/${id}/contacts/${cid}`);

@@ -4,9 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { getAirplanes } from '../api';
 
 const STATUS_DOT = {
-  draft:      'var(--text-muted)',
+  draft:       'var(--text-muted)',
   in_progress: 'var(--accent)',
-  qc_review:  'var(--warning)',
+  qc_review:   'var(--warning)',
 };
 
 const NAV_ITEMS = [
@@ -77,62 +77,60 @@ export default function Layout() {
         )}
       </div>
 
-      {/* Quick station nav */}
-      <div style={{ marginBottom: 'auto' }}>
+      {/* Quick Projects nav */}
+      <div style={{ marginBottom: 'auto', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{
           fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)',
           textTransform: 'uppercase', letterSpacing: '0.08em',
           padding: '0 4px', marginBottom: '6px',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          flexShrink: 0,
         }}>
-          <span>Quick Nav — Stations</span>
+          <span>Quick Nav — Projects</span>
           {activePlanes.length > 0 && (
             <span style={{ color: 'var(--accent)', fontSize: '9px' }}>
               {activePlanes.length} active
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          {stations.length === 0 ? (
-            // Fallback while data loads
-            ['F3-Prep','F3-S1','F3-S2','F3-S3a','F3-S3B','F3-S4'].map(name => (
-              <div key={name} style={{ padding: '6px 16px', fontSize: '12px', color: 'var(--text-muted)', opacity: 0.4 }}>
-                {name}
-              </div>
-            ))
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflowY: 'auto' }}>
+          {activePlanes.length === 0 ? (
+            <div style={{ padding: '6px 16px', fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              No active projects
+            </div>
           ) : (
-            stations.map(station => (
+            activePlanes.map(plane => (
               <button
-                key={station.id}
-                onClick={() => handleStationClick(station)}
-                disabled={activePlanes.length === 0}
+                key={plane.id}
+                onClick={() => handlePlaneClick(plane.id)}
                 style={{
                   background: 'transparent', border: 'none',
-                  color: activePlanes.length === 0 ? 'var(--text-muted)' : 'var(--text-secondary)',
+                  color: 'var(--text-secondary)',
                   textAlign: 'left', padding: '6px 16px', borderRadius: '6px',
-                  fontSize: '12px', cursor: activePlanes.length === 0 ? 'default' : 'pointer',
-                  transition: 'all 0.15s', opacity: activePlanes.length === 0 ? 0.4 : 1,
+                  fontSize: '12px', cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  display: 'flex', alignItems: 'center', gap: 0,
                 }}
                 onMouseEnter={e => {
-                  if (activePlanes.length === 0) return;
-                  e.target.style.background = 'var(--bg-hover)';
-                  e.target.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
                 }}
                 onMouseLeave={e => {
-                  e.target.style.background = 'transparent';
-                  e.target.style.color = activePlanes.length === 0 ? 'var(--text-muted)' : 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'var(--text-secondary)';
                 }}
               >
-                {station.name}
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                  background: STATUS_DOT[plane.status] || 'var(--text-muted)',
+                  marginRight: 8, flexShrink: 0,
+                }} />
+                <span style={{ fontWeight: 600 }}>{plane.serial_number}</span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>{plane.model}</span>
               </button>
             ))
           )}
         </div>
-        {activePlanes.length === 0 && stations.length > 0 && (
-          <div style={{ padding: '4px 16px', fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-            No active projects
-          </div>
-        )}
       </div>
 
       {/* User info */}
@@ -207,41 +205,6 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
-
-      {/* Airplane picker — shown when a station is clicked and there are multiple active projects */}
-      {stationPicker && (
-        <div
-          className="modal-overlay"
-          onClick={() => setStationPicker(null)}
-        >
-          <div
-            className="modal"
-            style={{ maxWidth: 340 }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="modal-title">Select Airplane — {stationPicker.stationName}</div>
-            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
-              Multiple active projects found. Which airplane are you working on?
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {activePlanes.map(plane => (
-                <button
-                  key={plane.id}
-                  className="btn btn-ghost"
-                  style={{ justifyContent: 'flex-start', gap: 12 }}
-                  onClick={() => pickPlane(plane.id)}
-                >
-                  <span style={{ fontWeight: 700 }}>{plane.serial_number}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{plane.model}</span>
-                </button>
-              ))}
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => setStationPicker(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <style>{`
         @media (max-width: 768px) {

@@ -56,6 +56,113 @@ const AIRCRAFT_SELECT = `
   created_at, updated_at
 `;
 
+// ─── Service Templates (registered before /:id to avoid param capture) ──────────
+
+// GET /api/fleet/service-templates
+router.get('/service-templates', async (_req, res) => {
+  try {
+    const rows = await query(
+      'SELECT * FROM fleet_service_templates WHERE active = TRUE ORDER BY category, sort_order, title'
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/fleet/service-templates
+router.post('/service-templates', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { category, title, interval_hours, interval_months, description, sort_order = 0 } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_service_templates (category, title, interval_hours, interval_months, description, sort_order) VALUES (?,?,?,?,?,?)',
+      [category?.trim() || 'General', title.trim(), interval_hours || null, interval_months || null, description || null, sort_order]
+    );
+    const rows = await query('SELECT * FROM fleet_service_templates WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// PUT /api/fleet/service-templates/:tid
+router.put('/service-templates/:tid', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { category, title, interval_hours, interval_months, description, sort_order } = req.body;
+  try {
+    await query(
+      'UPDATE fleet_service_templates SET category=?, title=?, interval_hours=?, interval_months=?, description=?, sort_order=? WHERE id=?',
+      [category?.trim() || 'General', title, interval_hours || null, interval_months || null, description || null, sort_order ?? 0, req.params.tid]
+    );
+    const rows = await query('SELECT * FROM fleet_service_templates WHERE id = ?', [req.params.tid]);
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// DELETE /api/fleet/service-templates/:tid (soft-delete)
+router.delete('/service-templates/:tid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('UPDATE fleet_service_templates SET active = FALSE WHERE id=?', [req.params.tid]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// GET /api/fleet/upcoming-services — services due in the next 60 days or within 20h
+router.get('/upcoming-services', async (_req, res) => {
+  try {
+    // Latest completion per (aircraft, template)
+    const rows = await query(`
+      SELECT
+        fa.id AS aircraft_id, fa.bw_serial, fa.registration, fa.country_code,
+        fa.total_hours_tsn,
+        fst.id AS template_id, fst.title, fst.category,
+        fst.interval_hours, fst.interval_months,
+        (SELECT fsr.completed_date FROM fleet_service_records fsr
+         WHERE fsr.aircraft_id = fa.id AND fsr.template_id = fst.id
+         ORDER BY fsr.completed_date DESC LIMIT 1) AS last_date,
+        (SELECT fsr.hours_at_completion FROM fleet_service_records fsr
+         WHERE fsr.aircraft_id = fa.id AND fsr.template_id = fst.id
+         ORDER BY fsr.completed_date DESC LIMIT 1) AS last_hours
+      FROM fleet_service_templates fst
+      CROSS JOIN fleet_aircraft fa
+      WHERE fst.active = TRUE
+      ORDER BY fa.bw_serial, fst.sort_order, fst.title
+    `);
+
+    const today = new Date();
+    const upcoming = [];
+
+    for (const r of rows) {
+      let dueDateStr = null, dueHours = null, overdue = false;
+
+      if (r.interval_months && r.last_date) {
+        const d = new Date(r.last_date);
+        d.setMonth(d.getMonth() + r.interval_months);
+        dueDateStr = d.toISOString().slice(0, 10);
+        const daysUntil = Math.ceil((d - today) / 86400000);
+        if (daysUntil <= 60) {
+          overdue = daysUntil < 0;
+          upcoming.push({ ...r, due_date: dueDateStr, due_hours: null, days_until: daysUntil, overdue });
+          continue;
+        }
+      } else if (r.interval_months && !r.last_date) {
+        // Never done — flag it
+        upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
+        continue;
+      }
+
+      if (r.interval_hours) {
+        const base = r.last_hours != null ? parseFloat(r.last_hours) : 0;
+        dueHours = base + r.interval_hours;
+        const tsn = r.total_hours_tsn != null ? parseFloat(r.total_hours_tsn) : 0;
+        const hoursUntil = dueHours - tsn;
+        if (!r.last_hours || hoursUntil <= 20) {
+          overdue = hoursUntil < 0;
+          upcoming.push({ ...r, due_date: null, due_hours: dueHours, hours_until: hoursUntil, overdue });
+        }
+      }
+    }
+
+    res.json(upcoming);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // ─── Config Options (registered before /:id to avoid param capture) ───────────
 
 // GET /api/fleet/config-options
@@ -186,7 +293,7 @@ router.get('/:id', async (req, res) => {
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'Aircraft not found' });
     const aircraft = normAircraft(rows[0]);
 
-    const [contacts, serials, events, images, configRows] = await Promise.all([
+    const [contacts, serials, events, images, configRows, serviceRecords] = await Promise.all([
       query('SELECT * FROM fleet_contacts WHERE aircraft_id = ? ORDER BY id', [req.params.id]),
       query('SELECT * FROM fleet_serial_numbers WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
       query(
@@ -197,10 +304,16 @@ router.get('/:id', async (req, res) => {
       ),
       query('SELECT * FROM fleet_images WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
       query('SELECT option_id FROM fleet_aircraft_config WHERE aircraft_id = ?', [req.params.id]),
+      query(
+        `SELECT fsr.*, u.name AS logged_by_name FROM fleet_service_records fsr
+         LEFT JOIN users u ON fsr.logged_by = u.id
+         WHERE fsr.aircraft_id = ? ORDER BY fsr.completed_date DESC, fsr.id DESC`,
+        [req.params.id]
+      ),
     ]);
 
     const selected_config = configRows.map(r => Number(r.option_id));
-    res.json({ ...aircraft, contacts, serials, events, images, selected_config });
+    res.json({ ...aircraft, contacts, serials, events, images, selected_config, service_records: serviceRecords });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -261,6 +374,36 @@ router.put('/:id/config', requireRole('admin', 'supervisor'), async (req, res) =
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// ─── Service Records ─────────────────────────────────────────────────────────
+
+// POST /api/fleet/:id/services — log a service completion
+router.post('/:id/services', async (req, res) => {
+  const { template_id, completed_date, hours_at_completion, signed_by, notes } = req.body;
+  if (!template_id || !completed_date || !signed_by) {
+    return res.status(400).json({ error: 'template_id, completed_date, and signed_by are required' });
+  }
+  try {
+    const r = await query(
+      'INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)',
+      [req.params.id, template_id, completed_date, hours_at_completion || null, signed_by.trim(), notes || null, req.user.id]
+    );
+    const rows = await query(
+      `SELECT fsr.*, u.name AS logged_by_name FROM fleet_service_records fsr
+       LEFT JOIN users u ON fsr.logged_by = u.id WHERE fsr.id = ?`,
+      [r.insertId]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// DELETE /api/fleet/:id/services/:rid
+router.delete('/:id/services/:rid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_service_records WHERE id=? AND aircraft_id=?', [req.params.rid, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── Contacts ────────────────────────────────────────────────────────────────

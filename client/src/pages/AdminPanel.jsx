@@ -4,6 +4,7 @@ import {
   getTaskTemplates, getStations, createTemplate, updateTemplate,
   getAuditLog,
   getFleetConfigOptions, createFleetConfigOption, updateFleetConfigOption, deleteFleetConfigOption,
+  getFleetServiceTemplates, createFleetServiceTemplate, updateFleetServiceTemplate, deleteFleetServiceTemplate,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
@@ -920,6 +921,175 @@ function FleetConfigTab() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Service Templates ─────────────────────────────────────────────────── */}
+      <ServiceTemplatesSection />
+    </div>
+  );
+}
+
+const SVC_CATEGORIES = ['Engine', 'Airframe', 'Propeller', 'Avionics', 'General'];
+const EMPTY_SVC = { category: 'Engine', title: '', interval_hours: '', interval_months: '', description: '', sort_order: 0 };
+
+function ServiceTemplatesSection() {
+  const toast = useToast();
+  const [templates, setTemplates] = useState([]);
+  const [loadingT,  setLoadingT]  = useState(true);
+  const [editSvcId, setEditSvcId] = useState(null);
+  const [editSvc,   setEditSvc]   = useState({});
+  const [addSvc,    setAddSvc]    = useState(EMPTY_SVC);
+  const [savingS,   setSavingS]   = useState(false);
+
+  useEffect(() => { loadTemplates(); }, []);
+
+  async function loadTemplates() {
+    setLoadingT(true);
+    try { const r = await getFleetServiceTemplates(); setTemplates(r.data); }
+    finally { setLoadingT(false); }
+  }
+
+  async function handleAddSvc(e) {
+    e.preventDefault();
+    if (!addSvc.title.trim()) { toast.error('Title is required'); return; }
+    setSavingS(true);
+    try {
+      const r = await createFleetServiceTemplate({
+        ...addSvc,
+        interval_hours:  addSvc.interval_hours  ? Number(addSvc.interval_hours)  : null,
+        interval_months: addSvc.interval_months ? Number(addSvc.interval_months) : null,
+      });
+      setTemplates(t => [...t, r.data]);
+      setAddSvc(EMPTY_SVC);
+      toast.success('Template added');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSavingS(false); }
+  }
+
+  async function handleUpdateSvc(tid) {
+    setSavingS(true);
+    try {
+      const r = await updateFleetServiceTemplate(tid, {
+        ...editSvc,
+        interval_hours:  editSvc.interval_hours  ? Number(editSvc.interval_hours)  : null,
+        interval_months: editSvc.interval_months ? Number(editSvc.interval_months) : null,
+      });
+      setTemplates(t => t.map(x => x.id === tid ? r.data : x));
+      setEditSvcId(null);
+      toast.success('Updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSavingS(false); }
+  }
+
+  async function handleDeleteSvc(tid) {
+    if (!window.confirm('Remove this service template? Existing completion records are kept.')) return;
+    try {
+      await deleteFleetServiceTemplate(tid);
+      setTemplates(t => t.filter(x => x.id !== tid));
+      toast.success('Removed');
+    } catch { toast.error('Delete failed'); }
+  }
+
+  return (
+    <div style={{ marginTop: 32 }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Service Templates</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        Define recurring maintenance tasks for engine and airframe. These appear as a checklist on each aircraft's Maintenance tab.
+      </p>
+
+      {/* Add form */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 12 }}>Add Service Template</div>
+        <form onSubmit={handleAddSvc}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '0 0 140px' }}>
+              <label>Category</label>
+              <select value={addSvc.category} onChange={e => setAddSvc(s => ({ ...s, category: e.target.value }))}>
+                {SVC_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: '1 1 200px' }}>
+              <label>Title *</label>
+              <input value={addSvc.title} onChange={e => setAddSvc(s => ({ ...s, title: e.target.value }))} placeholder="e.g. 50h Engine Oil Change" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 100px' }}>
+              <label>Every (hours)</label>
+              <input type="number" min="0" value={addSvc.interval_hours} onChange={e => setAddSvc(s => ({ ...s, interval_hours: e.target.value }))} placeholder="100" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 100px' }}>
+              <label>Every (months)</label>
+              <input type="number" min="0" value={addSvc.interval_months} onChange={e => setAddSvc(s => ({ ...s, interval_months: e.target.value }))} placeholder="12" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <label>&nbsp;</label>
+              <button type="submit" className="btn btn-primary" disabled={savingS}>{savingS ? '…' : '+ Add'}</button>
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Description / Notes</label>
+            <input value={addSvc.description} onChange={e => setAddSvc(s => ({ ...s, description: e.target.value }))} placeholder="Optional procedure notes" />
+          </div>
+        </form>
+      </div>
+
+      {/* Template list */}
+      {loadingT ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : templates.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>No service templates yet.</div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Title</th>
+                  <th style={{ width: 90 }}>Interval h</th>
+                  <th style={{ width: 90 }}>Interval mo</th>
+                  <th style={{ width: 90 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {templates.map(t => (
+                  <tr key={t.id}>
+                    <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {editSvcId === t.id
+                        ? <select value={editSvc.category} onChange={e => setEditSvc(s => ({ ...s, category: e.target.value }))} style={{ fontSize: 12 }}>
+                            {SVC_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                          </select>
+                        : t.category}
+                    </td>
+                    <td>
+                      {editSvcId === t.id
+                        ? <input autoFocus value={editSvc.title} onChange={e => setEditSvc(s => ({ ...s, title: e.target.value }))} style={{ fontSize: 13 }} />
+                        : <span style={{ fontSize: 13 }}>{t.title}</span>}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {editSvcId === t.id
+                        ? <input type="number" value={editSvc.interval_hours} onChange={e => setEditSvc(s => ({ ...s, interval_hours: e.target.value }))} style={{ fontSize: 13, width: 70 }} />
+                        : <span style={{ fontSize: 13, fontFamily: 'monospace' }}>{t.interval_hours ?? '—'}</span>}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {editSvcId === t.id
+                        ? <input type="number" value={editSvc.interval_months} onChange={e => setEditSvc(s => ({ ...s, interval_months: e.target.value }))} style={{ fontSize: 13, width: 70 }} />
+                        : <span style={{ fontSize: 13, fontFamily: 'monospace' }}>{t.interval_months ?? '—'}</span>}
+                    </td>
+                    <td>
+                      {editSvcId === t.id
+                        ? <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleUpdateSvc(t.id)} disabled={savingS}>✓</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditSvcId(null)}>✕</button>
+                          </div>
+                        : <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditSvcId(t.id); setEditSvc({ category: t.category, title: t.title, interval_hours: t.interval_hours ?? '', interval_months: t.interval_months ?? '', description: t.description ?? '' }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDeleteSvc(t.id)}>✕</button>
+                          </div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

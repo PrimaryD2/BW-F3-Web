@@ -7,6 +7,7 @@ import {
   addFleetEvent, deleteFleetEvent,
   uploadFleetImage, updateFleetImageCaption, deleteFleetImage,
   getFleetConfigOptions, saveFleetConfig,
+  getFleetServiceTemplates, completeFleetService, deleteFleetServiceRecord,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -49,11 +50,17 @@ const EVENT_TYPE_BADGE = {
 const DEFAULT_COMPONENTS = ['Engine', 'Propeller', 'Governor', 'ECU', 'Fusebox'];
 const EMPTY_CONTACT = { name: '', role: '', email: '', phone: '' };
 const EMPTY_EVENT   = { event_date: '', event_type: 'service', title: '', description: '', hours_at_event: '' };
+const EMPTY_COMPLETION = { completed_date: '', hours_at_completion: '', signed_by: '', notes: '' };
 
-function flagEmoji(code) {
-  if (!code || code.length !== 2) return '';
-  return code.toUpperCase().replace(/./g, c =>
-    String.fromCodePoint(c.charCodeAt(0) + 0x1F1A5)
+// ─── CSS Flag icon — works cross-platform (no emoji needed) ──────────────────
+
+function FlagIcon({ code }) {
+  if (!code || code.length !== 2) return null;
+  return (
+    <span
+      className={`fi fi-${code.toLowerCase()}`}
+      style={{ width: 20, height: 14, display: 'inline-block', borderRadius: 2, flexShrink: 0 }}
+    />
   );
 }
 
@@ -171,7 +178,7 @@ function CGTable({ cg }) {
 // ─── W&B Section (top-level to avoid re-mount on parent re-render) ───────────
 
 function WBSection({ form, aircraft, canEdit, setF }) {
-  const cg     = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
+  const cg      = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
   const cgSaved = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
 
   return (
@@ -266,6 +273,338 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
   );
 }
 
+// ─── Maintenance Tab (top-level to avoid re-mount) ───────────────────────────
+
+function MaintenanceTab({
+  aircraft, serviceTemplates, serviceRecords, setServiceRecords,
+  form, canEdit, setF, isSupervisor, toast,
+}) {
+  // Which template has the completion form open: templateId | null
+  const [openForm, setOpenForm] = useState(null);
+  const [compForm, setCompForm] = useState(EMPTY_COMPLETION);
+  const [compSaving, setCompSaving] = useState(false);
+
+  // Build a quick lookup: template_id → latest record
+  const latestByTemplate = serviceRecords.reduce((acc, rec) => {
+    if (!acc[rec.template_id] || rec.id > acc[rec.template_id].id) {
+      acc[rec.template_id] = rec;
+    }
+    return acc;
+  }, {});
+
+  // All records grouped by template
+  const recordsByTemplate = serviceRecords.reduce((acc, rec) => {
+    if (!acc[rec.template_id]) acc[rec.template_id] = [];
+    acc[rec.template_id].push(rec);
+    return acc;
+  }, {});
+
+  // Group templates by category
+  const grouped = serviceTemplates.reduce((acc, t) => {
+    if (!acc[t.category]) acc[t.category] = [];
+    acc[t.category].push(t);
+    return acc;
+  }, {});
+
+  function calcNextDue(template, latest) {
+    let byDate = null, byHours = null;
+    if (latest) {
+      if (template.interval_months) {
+        const d = new Date(latest.completed_date);
+        d.setMonth(d.getMonth() + template.interval_months);
+        byDate = d;
+      }
+      if (template.interval_hours && latest.hours_at_completion != null) {
+        byHours = parseFloat(latest.hours_at_completion) + template.interval_hours;
+      }
+    }
+    return { byDate, byHours };
+  }
+
+  function dueBadge(template, latest) {
+    const { byDate, byHours } = calcNextDue(template, latest);
+    const now = new Date();
+    const tsn = aircraft.total_hours_tsn;
+    let overdue = false, dueSoon = false;
+
+    if (byDate) {
+      const daysUntil = (byDate - now) / (1000 * 60 * 60 * 24);
+      if (daysUntil < 0) overdue = true;
+      else if (daysUntil <= 60) dueSoon = true;
+    }
+    if (byHours != null && tsn != null) {
+      const hoursUntil = byHours - tsn;
+      if (hoursUntil < 0) overdue = true;
+      else if (hoursUntil <= 20) dueSoon = true;
+    }
+
+    if (!latest) return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Never done</span>;
+    if (overdue)  return <span className="badge badge-danger" style={{ fontSize: 10 }}>Overdue</span>;
+    if (dueSoon)  return <span className="badge badge-warning" style={{ fontSize: 10 }}>Due soon</span>;
+    return <span className="badge badge-success" style={{ fontSize: 10 }}>OK</span>;
+  }
+
+  async function handleComplete(templateId) {
+    if (!compForm.completed_date || !compForm.signed_by.trim()) return;
+    setCompSaving(true);
+    try {
+      const res = await completeFleetService(aircraft.id, { template_id: templateId, ...compForm });
+      setServiceRecords(prev => [res.data, ...prev]);
+      setOpenForm(null);
+      setCompForm(EMPTY_COMPLETION);
+      toast.success('Service recorded');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save');
+    } finally {
+      setCompSaving(false);
+    }
+  }
+
+  async function handleDeleteRecord(aircraftId, recordId) {
+    if (!window.confirm('Delete this service record?')) return;
+    try {
+      await deleteFleetServiceRecord(aircraftId, recordId);
+      setServiceRecords(prev => prev.filter(r => r.id !== recordId));
+      toast.success('Record deleted');
+    } catch {
+      toast.error('Delete failed');
+    }
+  }
+
+  if (serviceTemplates.length === 0) {
+    return (
+      <>
+        {/* Hours section still shown at top */}
+        <HoursSummary aircraft={aircraft} form={form} canEdit={canEdit} setF={setF} />
+        <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', marginTop: 20 }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>🔧</div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>No service templates defined</div>
+          <p style={{ fontSize: 13 }}>Go to <strong>Admin → Fleet Config</strong> to add service intervals.</p>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {/* Hours & inspection at top */}
+      <HoursSummary aircraft={aircraft} form={form} canEdit={canEdit} setF={setF} />
+
+      <div style={{ marginTop: 24 }}>
+        {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, templates]) => (
+          <div key={cat} style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 10 }}>
+              {cat}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {templates.map(t => {
+                const latest = latestByTemplate[t.id] || null;
+                const { byDate, byHours } = calcNextDue(t, latest);
+                const allRecords = recordsByTemplate[t.id] || [];
+                const isOpen = openForm === t.id;
+
+                return (
+                  <div key={t.id} className="card" style={{ padding: 0 }}>
+                    {/* Template header row */}
+                    <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{t.title}</span>
+                          {dueBadge(t, latest)}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                          {t.interval_hours && <span>Every {t.interval_hours}h</span>}
+                          {t.interval_months && <span>Every {t.interval_months} month{t.interval_months !== 1 ? 's' : ''}</span>}
+                          {t.description && <span style={{ fontStyle: 'italic' }}>{t.description}</span>}
+                        </div>
+                      </div>
+
+                      {/* Last completion summary */}
+                      <div style={{ textAlign: 'right', minWidth: 160 }}>
+                        {latest ? (
+                          <>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                              Last: <strong>{fmtDate(latest.completed_date)}</strong>
+                              {latest.hours_at_completion != null && (
+                                <span style={{ fontFamily: 'monospace', marginLeft: 6 }}>@ {parseFloat(latest.hours_at_completion).toFixed(1)}h</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>by {latest.signed_by}</div>
+                            {(byDate || byHours != null) && (
+                              <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2 }}>
+                                Next:{' '}
+                                {byDate && <span>{fmtDate(byDate)}</span>}
+                                {byDate && byHours != null && ' / '}
+                                {byHours != null && <span style={{ fontFamily: 'monospace' }}>{byHours.toFixed(0)}h</span>}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>Never completed</div>
+                        )}
+                      </div>
+
+                      {/* Action button */}
+                      <button
+                        className={`btn btn-sm ${isOpen ? 'btn-ghost' : 'btn-primary'}`}
+                        style={{ flexShrink: 0 }}
+                        onClick={() => {
+                          if (isOpen) { setOpenForm(null); setCompForm(EMPTY_COMPLETION); }
+                          else { setOpenForm(t.id); setCompForm({ ...EMPTY_COMPLETION, completed_date: new Date().toISOString().slice(0, 10) }); }
+                        }}
+                      >
+                        {isOpen ? '✕ Cancel' : '✓ Mark Complete'}
+                      </button>
+                    </div>
+
+                    {/* Completion inline form */}
+                    {isOpen && (
+                      <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', background: 'var(--bg-hover)' }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12 }}>Record Completion</div>
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                          <div className="form-group" style={{ flex: '1 1 140px' }}>
+                            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Date *</label>
+                            <input
+                              type="date"
+                              value={compForm.completed_date}
+                              onChange={e => setCompForm(f => ({ ...f, completed_date: e.target.value }))}
+                              required
+                            />
+                          </div>
+                          <div className="form-group" style={{ flex: '1 1 120px' }}>
+                            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Hours (TSN)</label>
+                            <input
+                              type="number" step="0.1" min="0"
+                              placeholder={aircraft.total_hours_tsn != null ? `Current: ${aircraft.total_hours_tsn}` : 'Optional'}
+                              value={compForm.hours_at_completion}
+                              onChange={e => setCompForm(f => ({ ...f, hours_at_completion: e.target.value }))}
+                            />
+                          </div>
+                          <div className="form-group" style={{ flex: '1 1 160px' }}>
+                            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Signed by *</label>
+                            <input
+                              placeholder="Technician name"
+                              value={compForm.signed_by}
+                              onChange={e => setCompForm(f => ({ ...f, signed_by: e.target.value }))}
+                            />
+                          </div>
+                          <div className="form-group" style={{ flex: '2 1 240px' }}>
+                            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Notes</label>
+                            <input
+                              placeholder="Optional notes"
+                              value={compForm.notes}
+                              onChange={e => setCompForm(f => ({ ...f, notes: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleComplete(t.id)}
+                            disabled={compSaving || !compForm.completed_date || !compForm.signed_by.trim()}
+                          >
+                            {compSaving ? 'Saving…' : '💾 Save Record'}
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => { setOpenForm(null); setCompForm(EMPTY_COMPLETION); }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Service history (collapsed, show last 3) */}
+                    {allRecords.length > 0 && (
+                      <div style={{ borderTop: '1px solid var(--border)' }}>
+                        {allRecords.slice(0, 3).map(rec => (
+                          <div key={rec.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 10, padding: '7px 16px',
+                            fontSize: 12, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)',
+                          }}>
+                            <span style={{ color: 'var(--success)', fontSize: 13 }}>✓</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{fmtDate(rec.completed_date)}</span>
+                            {rec.hours_at_completion != null && (
+                              <span style={{ fontFamily: 'monospace' }}>@ {parseFloat(rec.hours_at_completion).toFixed(1)}h</span>
+                            )}
+                            <span style={{ flex: 1 }}>by <strong>{rec.signed_by}</strong></span>
+                            {rec.notes && <span style={{ fontStyle: 'italic', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.notes}</span>}
+                            {isSupervisor && (
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                style={{ padding: '1px 6px', fontSize: 11, color: 'var(--danger)', flexShrink: 0 }}
+                                onClick={() => handleDeleteRecord(aircraft.id, rec.id)}
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {allRecords.length > 3 && (
+                          <div style={{ padding: '6px 16px', fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            + {allRecords.length - 3} older records
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ─── Hours summary (split out so MaintenanceTab can include it) ───────────────
+
+function HoursSummary({ aircraft, form, canEdit, setF }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: 16 }}>Time Since New (TSN)</div>
+        {canEdit ? (
+          <>
+            <FormField label="Total Hours (TSN)">
+              <input type="number" step="0.1" min="0" value={form.total_hours_tsn} onChange={e => setF({ total_hours_tsn: e.target.value })} placeholder="0.0" />
+            </FormField>
+            <FormField label="Engine Hours">
+              <input type="number" step="0.1" min="0" value={form.engine_hours} onChange={e => setF({ engine_hours: e.target.value })} placeholder="0.0" />
+            </FormField>
+            <FormField label="Propeller Hours">
+              <input type="number" step="0.1" min="0" value={form.prop_hours} onChange={e => setF({ prop_hours: e.target.value })} placeholder="0.0" />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <InfoRow label="Total (TSN)" value={aircraft.total_hours_tsn != null ? `${aircraft.total_hours_tsn.toFixed(1)} h` : null} mono />
+            <InfoRow label="Engine"      value={aircraft.engine_hours != null ? `${aircraft.engine_hours.toFixed(1)} h` : null} mono />
+            <InfoRow label="Propeller"   value={aircraft.prop_hours != null ? `${aircraft.prop_hours.toFixed(1)} h` : null} mono />
+          </>
+        )}
+      </div>
+      <div className="card">
+        <div style={{ fontWeight: 700, marginBottom: 16 }}>Next Inspection Due</div>
+        {canEdit ? (
+          <>
+            <FormField label="By Date">
+              <input type="date" value={form.next_inspection_date} onChange={e => setF({ next_inspection_date: e.target.value })} />
+            </FormField>
+            <FormField label="By Hours">
+              <input type="number" step="1" min="0" value={form.next_inspection_hours} onChange={e => setF({ next_inspection_hours: e.target.value })} placeholder="Total hours at next inspection" />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <InfoRow label="By Date"  value={fmtDate(aircraft.next_inspection_date)} />
+            <InfoRow label="By Hours" value={aircraft.next_inspection_hours != null ? `${aircraft.next_inspection_hours.toFixed(0)} h` : null} mono />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function FleetDetail() {
@@ -289,26 +628,30 @@ export default function FleetDetail() {
   const [images,   setImages]   = useState([]);
 
   // Configuration options (from admin panel)
-  const [configOptions,   setConfigOptions]   = useState([]);   // all available options
-  const [selectedConfig,  setSelectedConfig]  = useState(new Set()); // selected option IDs
+  const [configOptions,   setConfigOptions]   = useState([]);
+  const [selectedConfig,  setSelectedConfig]  = useState(new Set());
   const [configDirty,     setConfigDirty]     = useState(false);
   const [configSaving,    setConfigSaving]    = useState(false);
 
-  // Contact modal: null | { mode:'add'|'edit', data:{...}, saving:bool, error:'' }
+  // Service templates & records
+  const [serviceTemplates, setServiceTemplates] = useState([]);
+  const [serviceRecords,   setServiceRecords]   = useState([]);
+
+  // Contact modal
   const [cModal, setCModal] = useState(null);
 
   // Serial add row
-  const [newSerial,   setNewSerial]   = useState({ component: '', serial_number: '', notes: '' });
+  const [newSerial,    setNewSerial]    = useState({ component: '', serial_number: '', notes: '' });
   const [addingSerial, setAddingSerial] = useState(false);
   const [serialSaving, setSerialSaving] = useState(false);
 
   // Event form
-  const [newEvent,   setNewEvent]   = useState(EMPTY_EVENT);
+  const [newEvent,    setNewEvent]    = useState(EMPTY_EVENT);
   const [eventSaving, setEventSaving] = useState(false);
 
   // Image upload
   const [imgUploading, setImgUploading] = useState(false);
-  const [captionEdit,  setCaptionEdit]  = useState({}); // { [imgId]: string }
+  const [captionEdit,  setCaptionEdit]  = useState({});
 
   // ─── Load ──────────────────────────────────────────────────────────────────
 
@@ -317,11 +660,13 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes] = await Promise.all([
+      const [res, optsRes, tmplRes] = await Promise.all([
         getFleetAircraft(id),
         getFleetConfigOptions(),
+        getFleetServiceTemplates(),
       ]);
       setConfigOptions(optsRes.data || []);
+      setServiceTemplates((tmplRes.data || []).filter(t => t.active));
       applyData(res.data);
     } finally {
       setLoading(false);
@@ -331,35 +676,36 @@ export default function FleetDetail() {
   function applyData(a) {
     setAircraft(a);
     setContacts(a.contacts || []);
-    setSerials(a.serials  || []);
-    setEvents(a.events   || []);
-    setImages(a.images   || []);
+    setSerials(a.serials   || []);
+    setEvents(a.events     || []);
+    setImages(a.images     || []);
+    setServiceRecords(a.service_records || []);
     setSelectedConfig(new Set((a.selected_config || []).map(Number)));
     setConfigDirty(false);
     setForm({
-      bw_serial:            a.bw_serial            || '',
-      aircraft_number:      a.aircraft_number       || '',
-      model:                a.model                || 'BW600',
-      build_status:         a.build_status          || 'in_production',
-      registration:         a.registration          || '',
-      country_code:         a.country_code          || '',
-      country_name:         a.country_name          || '',
-      customer_name:        a.customer_name         || '',
-      first_flight_date:    a.first_flight_date  ? a.first_flight_date.slice(0, 10)  : '',
-      delivery_date:        a.delivery_date      ? a.delivery_date.slice(0, 10)      : '',
-      empty_weight_kg:      a.empty_weight_kg    != null ? String(a.empty_weight_kg)    : '',
-      nose_wheel_weight:    a.nose_wheel_weight  != null ? String(a.nose_wheel_weight)  : '',
-      left_wheel_weight:    a.left_wheel_weight  != null ? String(a.left_wheel_weight)  : '',
-      right_wheel_weight:   a.right_wheel_weight != null ? String(a.right_wheel_weight) : '',
-      airworthiness_status: a.airworthiness_status  || '',
-      airworthiness_expiry: a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
-      total_hours_tsn:      a.total_hours_tsn    != null ? String(a.total_hours_tsn)    : '',
-      engine_hours:         a.engine_hours       != null ? String(a.engine_hours)       : '',
-      prop_hours:           a.prop_hours         != null ? String(a.prop_hours)         : '',
+      bw_serial:             a.bw_serial             || '',
+      aircraft_number:       a.aircraft_number        || '',
+      model:                 a.model                 || 'BW600',
+      build_status:          a.build_status           || 'in_production',
+      registration:          a.registration           || '',
+      country_code:          a.country_code           || '',
+      country_name:          a.country_name           || '',
+      customer_name:         a.customer_name          || '',
+      first_flight_date:     a.first_flight_date   ? a.first_flight_date.slice(0, 10)   : '',
+      delivery_date:         a.delivery_date       ? a.delivery_date.slice(0, 10)       : '',
+      empty_weight_kg:       a.empty_weight_kg     != null ? String(a.empty_weight_kg)     : '',
+      nose_wheel_weight:     a.nose_wheel_weight   != null ? String(a.nose_wheel_weight)   : '',
+      left_wheel_weight:     a.left_wheel_weight   != null ? String(a.left_wheel_weight)   : '',
+      right_wheel_weight:    a.right_wheel_weight  != null ? String(a.right_wheel_weight)  : '',
+      airworthiness_status:  a.airworthiness_status  || '',
+      airworthiness_expiry:  a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
+      total_hours_tsn:       a.total_hours_tsn     != null ? String(a.total_hours_tsn)     : '',
+      engine_hours:          a.engine_hours        != null ? String(a.engine_hours)        : '',
+      prop_hours:            a.prop_hours          != null ? String(a.prop_hours)          : '',
       next_inspection_date:  a.next_inspection_date  ? a.next_inspection_date.slice(0, 10) : '',
       next_inspection_hours: a.next_inspection_hours != null ? String(a.next_inspection_hours) : '',
-      financing_flag:        a.financing_flag    || false,
-      notes:                 a.notes             || '',
+      financing_flag:        a.financing_flag      || false,
+      notes:                 a.notes              || '',
     });
     setDirty(false);
   }
@@ -372,7 +718,7 @@ export default function FleetDetail() {
     setSaving(true);
     try {
       const res = await updateFleetAircraft(id, form);
-      applyData({ ...res.data, contacts, serials, events, images, selected_config: [...selectedConfig] });
+      applyData({ ...res.data, contacts, serials, events, images, service_records: serviceRecords, selected_config: [...selectedConfig] });
       toast.success('Aircraft saved');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -558,12 +904,12 @@ export default function FleetDetail() {
                 <span className="badge badge-warning" style={{ fontSize: 10 }}>💳 Financing</span>
               )}
             </div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span>{aircraft.model}</span>
               {aircraft.registration && (
                 <>
                   <span style={{ color: 'var(--border)' }}>·</span>
-                  <span style={{ fontSize: 16 }}>{flagEmoji(aircraft.country_code)}</span>
+                  <FlagIcon code={aircraft.country_code} />
                   <span>{aircraft.registration}</span>
                 </>
               )}
@@ -603,6 +949,9 @@ export default function FleetDetail() {
             }}
           >
             {t}
+            {t === 'Maintenance' && serviceRecords.length > 0 && (
+              <span style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-hover)', borderRadius: 10, padding: '1px 6px' }}>{serviceRecords.length}</span>
+            )}
             {t === 'Components' && serials.length > 0 && (
               <span style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-hover)', borderRadius: 10, padding: '1px 6px' }}>{serials.length}</span>
             )}
@@ -670,7 +1019,14 @@ export default function FleetDetail() {
                 <InfoRow label="Build Status" value={BUILD_STATUS_LABEL[aircraft.build_status]} />
                 <InfoRow label="Owner / Customer" value={aircraft.customer_name} />
                 <InfoRow label="Registration" value={aircraft.registration} />
-                <InfoRow label="Country" value={[flagEmoji(aircraft.country_code), aircraft.country_name].filter(Boolean).join(' ')} />
+                <InfoRow label="Country" value={
+                  aircraft.country_name
+                    ? <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <FlagIcon code={aircraft.country_code} />
+                        {aircraft.country_name}
+                      </span>
+                    : null
+                } />
               </>
             )}
           </div>
@@ -766,48 +1122,17 @@ export default function FleetDetail() {
 
       {/* ── MAINTENANCE ──────────────────────────────────────────────────────── */}
       {tab === 'Maintenance' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
-          <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: 16 }}>Time Since New (TSN)</div>
-            {canEdit ? (
-              <>
-                <FormField label="Total Hours (TSN)">
-                  <input type="number" step="0.1" min="0" value={form.total_hours_tsn} onChange={e => setF({ total_hours_tsn: e.target.value })} placeholder="0.0" />
-                </FormField>
-                <FormField label="Engine Hours">
-                  <input type="number" step="0.1" min="0" value={form.engine_hours} onChange={e => setF({ engine_hours: e.target.value })} placeholder="0.0" />
-                </FormField>
-                <FormField label="Propeller Hours">
-                  <input type="number" step="0.1" min="0" value={form.prop_hours} onChange={e => setF({ prop_hours: e.target.value })} placeholder="0.0" />
-                </FormField>
-              </>
-            ) : (
-              <>
-                <InfoRow label="Total (TSN)" value={aircraft.total_hours_tsn != null ? `${aircraft.total_hours_tsn.toFixed(1)} h` : null} mono />
-                <InfoRow label="Engine"      value={aircraft.engine_hours != null ? `${aircraft.engine_hours.toFixed(1)} h` : null} mono />
-                <InfoRow label="Propeller"   value={aircraft.prop_hours != null ? `${aircraft.prop_hours.toFixed(1)} h` : null} mono />
-              </>
-            )}
-          </div>
-          <div className="card">
-            <div style={{ fontWeight: 700, marginBottom: 16 }}>Next Inspection Due</div>
-            {canEdit ? (
-              <>
-                <FormField label="By Date">
-                  <input type="date" value={form.next_inspection_date} onChange={e => setF({ next_inspection_date: e.target.value })} />
-                </FormField>
-                <FormField label="By Hours">
-                  <input type="number" step="1" min="0" value={form.next_inspection_hours} onChange={e => setF({ next_inspection_hours: e.target.value })} placeholder="Total hours at next inspection" />
-                </FormField>
-              </>
-            ) : (
-              <>
-                <InfoRow label="By Date"  value={fmtDate(aircraft.next_inspection_date)} />
-                <InfoRow label="By Hours" value={aircraft.next_inspection_hours != null ? `${aircraft.next_inspection_hours.toFixed(0)} h` : null} mono />
-              </>
-            )}
-          </div>
-        </div>
+        <MaintenanceTab
+          aircraft={aircraft}
+          serviceTemplates={serviceTemplates}
+          serviceRecords={serviceRecords}
+          setServiceRecords={setServiceRecords}
+          form={form}
+          canEdit={canEdit}
+          setF={setF}
+          isSupervisor={isSupervisor}
+          toast={toast}
+        />
       )}
 
       {/* ── COMPONENTS ───────────────────────────────────────────────────────── */}
@@ -1029,7 +1354,10 @@ export default function FleetDetail() {
                             placeholder="Caption…"
                             style={{ flex: 1, fontSize: 12 }}
                             autoFocus
-                            onKeyDown={e => { if (e.key === 'Enter') handleSaveCaption(img.id); if (e.key === 'Escape') setCaptionEdit(c => { const n = { ...c }; delete n[img.id]; return n; }); }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') handleSaveCaption(img.id);
+                              if (e.key === 'Escape') setCaptionEdit(c => { const n = { ...c }; delete n[img.id]; return n; });
+                            }}
                           />
                           <button className="btn btn-primary btn-sm" onClick={() => handleSaveCaption(img.id)}>✓</button>
                         </div>
