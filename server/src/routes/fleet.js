@@ -129,33 +129,43 @@ router.get('/upcoming-services', async (_req, res) => {
     const upcoming = [];
 
     for (const r of rows) {
-      let dueDateStr = null, dueHours = null, overdue = false;
+      const neverDone = !r.last_date; // no completion record at all
 
-      if (r.interval_months && r.last_date) {
-        const d = new Date(r.last_date);
-        d.setMonth(d.getMonth() + r.interval_months);
-        dueDateStr = d.toISOString().slice(0, 10);
-        const daysUntil = Math.ceil((d - today) / 86400000);
-        if (daysUntil <= 60) {
-          overdue = daysUntil < 0;
-          upcoming.push({ ...r, due_date: dueDateStr, due_hours: null, days_until: daysUntil, overdue });
+      // ── Date-interval check ────────────────────────────────────────────────
+      if (r.interval_months) {
+        if (neverDone) {
+          // Never serviced — always flag regardless of hours
+          upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
           continue;
         }
-      } else if (r.interval_months && !r.last_date) {
-        // Never done — flag it
-        upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
-        continue;
+        const d = new Date(r.last_date);
+        d.setMonth(d.getMonth() + r.interval_months);
+        const dueDateStr = d.toISOString().slice(0, 10);
+        const daysUntil  = Math.ceil((d - today) / 86400000);
+        if (daysUntil <= 60) {
+          upcoming.push({ ...r, due_date: dueDateStr, due_hours: null, days_until: daysUntil, overdue: daysUntil < 0 });
+          continue; // date-interval handled; skip hours check for this row
+        }
+        // Not due by date yet — fall through to hours check below
       }
 
+      // ── Hours-interval check ───────────────────────────────────────────────
       if (r.interval_hours) {
-        const base = r.last_hours != null ? parseFloat(r.last_hours) : 0;
-        dueHours = base + r.interval_hours;
-        const tsn = r.total_hours_tsn != null ? parseFloat(r.total_hours_tsn) : 0;
-        const hoursUntil = dueHours - tsn;
-        if (!r.last_hours || hoursUntil <= 20) {
-          overdue = hoursUntil < 0;
-          upcoming.push({ ...r, due_date: null, due_hours: dueHours, hours_until: hoursUntil, overdue });
+        if (neverDone) {
+          // Never serviced and no date interval already caught it — flag it
+          upcoming.push({ ...r, due_date: null, due_hours: r.interval_hours, hours_until: null, overdue: true });
+        } else if (r.last_hours != null) {
+          // Completion exists AND hours were recorded — calculate precisely
+          const dueHours   = parseFloat(r.last_hours) + r.interval_hours;
+          const tsn        = r.total_hours_tsn != null ? parseFloat(r.total_hours_tsn) : 0;
+          const hoursUntil = dueHours - tsn;
+          if (hoursUntil <= 20) {
+            upcoming.push({ ...r, due_date: null, due_hours: dueHours, hours_until: hoursUntil, overdue: hoursUntil < 0 });
+          }
+          // else: not due yet — no alert
         }
+        // If last_hours is null but last_date exists: service was logged without hours.
+        // Can't calculate hours-based due time — skip hours alert for this entry.
       }
     }
 

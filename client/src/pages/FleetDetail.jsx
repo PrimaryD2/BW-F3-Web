@@ -432,10 +432,10 @@ function MaintenanceTab({
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>by {latest.signed_by}</div>
                             {(byDate || byHours != null) && (
                               <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2 }}>
-                                Next:{' '}
+                                Next due:{' '}
                                 {byDate && <span>{fmtDate(byDate)}</span>}
                                 {byDate && byHours != null && ' / '}
-                                {byHours != null && <span style={{ fontFamily: 'monospace' }}>{byHours.toFixed(0)}h</span>}
+                                {byHours != null && <span style={{ fontFamily: 'monospace' }}>{byHours.toFixed(0)}h TSN</span>}
                               </div>
                             )}
                           </>

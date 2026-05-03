@@ -930,7 +930,7 @@ function FleetConfigTab() {
   );
 }
 
-const SVC_CATEGORIES = ['Engine', 'Airframe', 'Propeller', 'Avionics', 'General'];
+const SVC_CATEGORIES = ['Engine', 'Airframe'];
 const EMPTY_SVC = { category: 'Engine', title: '', interval_hours: '', interval_months: '', description: '', sort_order: 0 };
 
 function ServiceTemplatesSection() {
