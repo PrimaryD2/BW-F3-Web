@@ -205,6 +205,22 @@ CREATE TABLE IF NOT EXISTS fleet_images (
   FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS fleet_config_options (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  category VARCHAR(100) NOT NULL,
+  label VARCHAR(200) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fleet_aircraft_config (
+  aircraft_id INT NOT NULL,
+  option_id   INT NOT NULL,
+  PRIMARY KEY (aircraft_id, option_id),
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (option_id)   REFERENCES fleet_config_options(id) ON DELETE CASCADE
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.
@@ -225,6 +241,10 @@ const ALTER_STMTS = [
   `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS part_assembly_number VARCHAR(100) NULL`,
   `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS drawing_number VARCHAR(100) NULL`,
   `ALTER TABLE nonconformity_reports ADD COLUMN IF NOT EXISTS is_safety_concern BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Fleet W&B wheel weights
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS nose_wheel_weight DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS left_wheel_weight  DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS right_wheel_weight DECIMAL(8,2) NULL`,
 ];
 
 async function migrate() {

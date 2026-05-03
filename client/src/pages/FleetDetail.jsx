@@ -6,6 +6,7 @@ import {
   addFleetSerial, deleteFleetSerial,
   addFleetEvent, deleteFleetEvent,
   uploadFleetImage, updateFleetImageCaption, deleteFleetImage,
+  getFleetConfigOptions, saveFleetConfig,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -13,7 +14,7 @@ import { useToast } from '../context/ToastContext';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TABS = ['Overview', 'Configuration', 'Maintenance', 'Components', 'Events', 'Gallery', 'Contacts'];
-const MAIN_TABS = new Set(['Overview', 'Configuration', 'Maintenance']);
+const AIRCRAFT_EDIT_TABS = new Set(['Overview', 'Maintenance']); // tabs that save via handleSave
 
 const BUILD_STATUS_BADGE = {
   in_production: 'badge-info',
@@ -85,6 +86,152 @@ function InfoRow({ label, value, mono }) {
   );
 }
 
+// ─── CG Calculation ──────────────────────────────────────────────────────────
+// Moments: nose × (−796mm), mains × 601mm
+// CG position (mm) = total_moment / total_weight
+// CG % MAC = (cg_mm − 54) / 1121 × 100   (acceptable: 15–20%)
+
+function calcCG(nose, left, right) {
+  const n = parseFloat(nose), l = parseFloat(left), r = parseFloat(right);
+  if (!n || !l || !r || isNaN(n) || isNaN(l) || isNaN(r)) return null;
+  const totalWeight = n + l + r;
+  if (totalWeight <= 0) return null;
+  const totalMoment = n * (-796) + (l + r) * 601;
+  const cgMm = totalMoment / totalWeight;
+  const cgPct = (cgMm - 54) / 1121 * 100;
+  return { cgMm: cgMm.toFixed(1), cgPct: cgPct.toFixed(1), totalWeight: totalWeight.toFixed(1), ok: cgPct >= 15 && cgPct <= 20 };
+}
+
+// ─── W&B Section (top-level to avoid re-mount on parent re-render) ───────────
+
+function WBSection({ form, aircraft, canEdit, setF }) {
+  const cg = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
+
+  return (
+    <>
+      <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Weight & Balance</div>
+      {canEdit ? (
+        <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+            <FormField label="Empty Weight (kg)" half>
+              <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setF({ empty_weight_kg: e.target.value })} placeholder="Total empty weight" />
+            </FormField>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <FormField label="Nose Wheel (kg)" half>
+              <input type="number" step="0.1" value={form.nose_wheel_weight} onChange={e => setF({ nose_wheel_weight: e.target.value })} placeholder="e.g. 120" />
+            </FormField>
+            <FormField label="Left Main (kg)" half>
+              <input type="number" step="0.1" value={form.left_wheel_weight} onChange={e => setF({ left_wheel_weight: e.target.value })} placeholder="e.g. 230" />
+            </FormField>
+            <FormField label="Right Main (kg)" half>
+              <input type="number" step="0.1" value={form.right_wheel_weight} onChange={e => setF({ right_wheel_weight: e.target.value })} placeholder="e.g. 230" />
+            </FormField>
+          </div>
+          {cg && (
+            <div style={{
+              marginTop: 10, padding: '10px 14px', borderRadius: 8,
+              background: cg.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+              border: `1px solid ${cg.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.35)'}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>CG Position: </span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{cg.cgMm} mm</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 12 }}>Total: {cg.totalWeight} kg</span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: cg.ok ? 'var(--success)' : 'var(--danger)' }}>{cg.cgPct}%</span>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>% MAC (15–20% OK)</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <InfoRow label="Empty Weight" value={aircraft.empty_weight_kg != null ? `${aircraft.empty_weight_kg} kg` : null} />
+          <InfoRow label="Nose Wheel" value={aircraft.nose_wheel_weight != null ? `${aircraft.nose_wheel_weight} kg` : null} />
+          <InfoRow label="Left Main" value={aircraft.left_wheel_weight != null ? `${aircraft.left_wheel_weight} kg` : null} />
+          <InfoRow label="Right Main" value={aircraft.right_wheel_weight != null ? `${aircraft.right_wheel_weight} kg` : null} />
+          {(() => {
+            const cg2 = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
+            if (!cg2) return null;
+            return (
+              <div style={{
+                marginTop: 8, padding: '8px 12px', borderRadius: 8, display: 'flex', justifyContent: 'space-between',
+                background: cg2.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${cg2.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.35)'}`,
+              }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>CG: <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{cg2.cgMm} mm</span></span>
+                <span style={{ fontWeight: 700, color: cg2.ok ? 'var(--success)' : 'var(--danger)' }}>{cg2.cgPct}% MAC</span>
+              </div>
+            );
+          })()}
+        </>
+      )}
+    </>
+  );
+}
+
+// ─── Configuration Tab (top-level to avoid re-mount) ─────────────────────────
+
+function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
+  const grouped = configOptions.reduce((acc, o) => {
+    if (!acc[o.category]) acc[o.category] = [];
+    acc[o.category].push(o);
+    return acc;
+  }, {});
+
+  if (configOptions.length === 0) {
+    return (
+      <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>⚙</div>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>No configuration options defined</div>
+        <p style={{ fontSize: 13 }}>Go to <strong>Admin → Fleet Config</strong> to add engine, propeller, avionics, and other options.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+      {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => (
+        <div key={cat} className="card">
+          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
+            {cat}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {opts.map(o => {
+              const checked = selectedConfig.has(o.id);
+              return (
+                <label
+                  key={o.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, cursor: canEdit ? 'pointer' : 'default',
+                    padding: '7px 10px', borderRadius: 6,
+                    background: checked ? 'rgba(99,102,241,0.08)' : 'transparent',
+                    border: checked ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
+                    transition: 'all 0.12s',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => canEdit && onToggle(o.id)}
+                    disabled={!canEdit}
+                    style={{ width: 15, height: 15, flexShrink: 0 }}
+                  />
+                  <span style={{ fontSize: 13, fontWeight: checked ? 600 : 400 }}>{o.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function FleetDetail() {
@@ -106,6 +253,12 @@ export default function FleetDetail() {
   const [serials,  setSerials]  = useState([]);
   const [events,   setEvents]   = useState([]);
   const [images,   setImages]   = useState([]);
+
+  // Configuration options (from admin panel)
+  const [configOptions,   setConfigOptions]   = useState([]);   // all available options
+  const [selectedConfig,  setSelectedConfig]  = useState(new Set()); // selected option IDs
+  const [configDirty,     setConfigDirty]     = useState(false);
+  const [configSaving,    setConfigSaving]    = useState(false);
 
   // Contact modal: null | { mode:'add'|'edit', data:{...}, saving:bool, error:'' }
   const [cModal, setCModal] = useState(null);
@@ -130,7 +283,11 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const res = await getFleetAircraft(id);
+      const [res, optsRes] = await Promise.all([
+        getFleetAircraft(id),
+        getFleetConfigOptions(),
+      ]);
+      setConfigOptions(optsRes.data || []);
       applyData(res.data);
     } finally {
       setLoading(false);
@@ -143,34 +300,32 @@ export default function FleetDetail() {
     setSerials(a.serials  || []);
     setEvents(a.events   || []);
     setImages(a.images   || []);
+    setSelectedConfig(new Set((a.selected_config || []).map(Number)));
+    setConfigDirty(false);
     setForm({
-      bw_serial:               a.bw_serial               || '',
-      aircraft_number:         a.aircraft_number          || '',
-      model:                   a.model                    || 'BW600',
-      build_status:            a.build_status             || 'in_production',
-      registration:            a.registration             || '',
-      country_code:            a.country_code             || '',
-      country_name:            a.country_name             || '',
-      customer_name:           a.customer_name            || '',
-      first_flight_date:       a.first_flight_date  ? a.first_flight_date.slice(0, 10)  : '',
-      delivery_date:           a.delivery_date      ? a.delivery_date.slice(0, 10)      : '',
-      empty_weight_kg:         a.empty_weight_kg    != null ? String(a.empty_weight_kg)    : '',
-      useful_load_kg:          a.useful_load_kg     != null ? String(a.useful_load_kg)     : '',
-      airworthiness_status:    a.airworthiness_status     || '',
-      airworthiness_authority: a.airworthiness_authority  || '',
-      airworthiness_expiry:    a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
-      config_engine:           a.config_engine            || '',
-      config_prop:             a.config_prop              || '',
-      config_avionics:         a.config_avionics          || '',
-      config_interior:         a.config_interior          || '',
-      config_paint:            a.config_paint             || '',
-      total_hours_tsn:         a.total_hours_tsn    != null ? String(a.total_hours_tsn)    : '',
-      engine_hours:            a.engine_hours       != null ? String(a.engine_hours)       : '',
-      prop_hours:              a.prop_hours         != null ? String(a.prop_hours)         : '',
-      next_inspection_date:    a.next_inspection_date  ? a.next_inspection_date.slice(0, 10) : '',
-      next_inspection_hours:   a.next_inspection_hours != null ? String(a.next_inspection_hours) : '',
-      financing_flag:          a.financing_flag           || false,
-      notes:                   a.notes                    || '',
+      bw_serial:            a.bw_serial            || '',
+      aircraft_number:      a.aircraft_number       || '',
+      model:                a.model                || 'BW600',
+      build_status:         a.build_status          || 'in_production',
+      registration:         a.registration          || '',
+      country_code:         a.country_code          || '',
+      country_name:         a.country_name          || '',
+      customer_name:        a.customer_name         || '',
+      first_flight_date:    a.first_flight_date  ? a.first_flight_date.slice(0, 10)  : '',
+      delivery_date:        a.delivery_date      ? a.delivery_date.slice(0, 10)      : '',
+      empty_weight_kg:      a.empty_weight_kg    != null ? String(a.empty_weight_kg)    : '',
+      nose_wheel_weight:    a.nose_wheel_weight  != null ? String(a.nose_wheel_weight)  : '',
+      left_wheel_weight:    a.left_wheel_weight  != null ? String(a.left_wheel_weight)  : '',
+      right_wheel_weight:   a.right_wheel_weight != null ? String(a.right_wheel_weight) : '',
+      airworthiness_status: a.airworthiness_status  || '',
+      airworthiness_expiry: a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
+      total_hours_tsn:      a.total_hours_tsn    != null ? String(a.total_hours_tsn)    : '',
+      engine_hours:         a.engine_hours       != null ? String(a.engine_hours)       : '',
+      prop_hours:           a.prop_hours         != null ? String(a.prop_hours)         : '',
+      next_inspection_date:  a.next_inspection_date  ? a.next_inspection_date.slice(0, 10) : '',
+      next_inspection_hours: a.next_inspection_hours != null ? String(a.next_inspection_hours) : '',
+      financing_flag:        a.financing_flag    || false,
+      notes:                 a.notes             || '',
     });
     setDirty(false);
   }
@@ -183,13 +338,35 @@ export default function FleetDetail() {
     setSaving(true);
     try {
       const res = await updateFleetAircraft(id, form);
-      applyData({ ...res.data, contacts, serials, events, images });
+      applyData({ ...res.data, contacts, serials, events, images, selected_config: [...selectedConfig] });
       toast.success('Aircraft saved');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSaveConfig() {
+    setConfigSaving(true);
+    try {
+      await saveFleetConfig(id, [...selectedConfig]);
+      setConfigDirty(false);
+      toast.success('Configuration saved');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Save failed');
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  function toggleConfigOption(optId) {
+    setSelectedConfig(prev => {
+      const next = new Set(prev);
+      if (next.has(optId)) next.delete(optId); else next.add(optId);
+      return next;
+    });
+    setConfigDirty(true);
   }
 
   // ─── Contacts ──────────────────────────────────────────────────────────────
@@ -365,9 +542,14 @@ export default function FleetDetail() {
             </div>
           </div>
         </div>
-        {canEdit && MAIN_TABS.has(tab) && dirty && (
+        {canEdit && AIRCRAFT_EDIT_TABS.has(tab) && dirty && (
           <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ flexShrink: 0 }}>
             {saving ? 'Saving…' : '💾 Save Changes'}
+          </button>
+        )}
+        {canEdit && tab === 'Configuration' && configDirty && (
+          <button className="btn btn-primary" onClick={handleSaveConfig} disabled={configSaving} style={{ flexShrink: 0 }}>
+            {configSaving ? 'Saving…' : '💾 Save Configuration'}
           </button>
         )}
       </div>
@@ -492,22 +674,7 @@ export default function FleetDetail() {
               </>
             )}
 
-            <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Weight & Balance</div>
-            {canEdit ? (
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <FormField label="Empty Weight (kg)" half>
-                  <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setF({ empty_weight_kg: e.target.value })} placeholder="e.g. 580" />
-                </FormField>
-                <FormField label="Useful Load (kg)" half>
-                  <input type="number" step="0.1" value={form.useful_load_kg} onChange={e => setF({ useful_load_kg: e.target.value })} placeholder="e.g. 220" />
-                </FormField>
-              </div>
-            ) : (
-              <>
-                <InfoRow label="Empty Weight" value={aircraft.empty_weight_kg != null ? `${aircraft.empty_weight_kg} kg` : null} />
-                <InfoRow label="Useful Load" value={aircraft.useful_load_kg != null ? `${aircraft.useful_load_kg} kg` : null} />
-              </>
-            )}
+            <WBSection form={form} aircraft={aircraft} canEdit={canEdit} setF={setF} />
 
             <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Airworthiness</div>
             {canEdit ? (
@@ -521,19 +688,13 @@ export default function FleetDetail() {
                     <option value="unknown">Unknown</option>
                   </select>
                 </FormField>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <FormField label="Authority" half>
-                    <input value={form.airworthiness_authority} onChange={e => setF({ airworthiness_authority: e.target.value })} placeholder="CAA / EASA / FAA" />
-                  </FormField>
-                  <FormField label="Expiry" half>
-                    <input type="date" value={form.airworthiness_expiry} onChange={e => setF({ airworthiness_expiry: e.target.value })} />
-                  </FormField>
-                </div>
+                <FormField label="Expiry">
+                  <input type="date" value={form.airworthiness_expiry} onChange={e => setF({ airworthiness_expiry: e.target.value })} />
+                </FormField>
               </>
             ) : (
               <>
                 <InfoRow label="Status" value={aircraft.airworthiness_status ? aircraft.airworthiness_status.charAt(0).toUpperCase() + aircraft.airworthiness_status.slice(1) : null} />
-                <InfoRow label="Authority" value={aircraft.airworthiness_authority} />
                 <InfoRow label="Expiry" value={fmtDate(aircraft.airworthiness_expiry)} />
               </>
             )}
@@ -561,36 +722,12 @@ export default function FleetDetail() {
 
       {/* ── CONFIGURATION ────────────────────────────────────────────────────── */}
       {tab === 'Configuration' && (
-        <div className="card" style={{ maxWidth: 640 }}>
-          <div style={{ fontWeight: 700, marginBottom: 16 }}>Aircraft Configuration</div>
-          {canEdit ? (
-            <>
-              <FormField label="Engine">
-                <input value={form.config_engine} onChange={e => setF({ config_engine: e.target.value })} placeholder="e.g. Rotax 912 ULS 100hp" />
-              </FormField>
-              <FormField label="Propeller">
-                <input value={form.config_prop} onChange={e => setF({ config_prop: e.target.value })} placeholder="e.g. Duc Swirl 3-blade" />
-              </FormField>
-              <FormField label="Avionics">
-                <textarea value={form.config_avionics} onChange={e => setF({ config_avionics: e.target.value })} rows={3} placeholder="e.g. Garmin G3X Touch, GNC 355, GTX 345..." style={{ resize: 'vertical' }} />
-              </FormField>
-              <FormField label="Interior">
-                <input value={form.config_interior} onChange={e => setF({ config_interior: e.target.value })} placeholder="e.g. Standard leather, carbon trim" />
-              </FormField>
-              <FormField label="Paint Scheme">
-                <input value={form.config_paint} onChange={e => setF({ config_paint: e.target.value })} placeholder="e.g. White / Blue rally stripes" />
-              </FormField>
-            </>
-          ) : (
-            <>
-              <InfoRow label="Engine" value={aircraft.config_engine} />
-              <InfoRow label="Propeller" value={aircraft.config_prop} />
-              <InfoRow label="Avionics" value={aircraft.config_avionics} />
-              <InfoRow label="Interior" value={aircraft.config_interior} />
-              <InfoRow label="Paint Scheme" value={aircraft.config_paint} />
-            </>
-          )}
-        </div>
+        <ConfigTab
+          configOptions={configOptions}
+          selectedConfig={selectedConfig}
+          canEdit={canEdit}
+          onToggle={toggleConfigOption}
+        />
       )}
 
       {/* ── MAINTENANCE ──────────────────────────────────────────────────────── */}

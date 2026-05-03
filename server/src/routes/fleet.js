@@ -22,7 +22,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (/^image\//i.test(file.mimetype)) cb(null, true);
     else cb(new Error('Only image files are allowed'));
@@ -33,35 +33,95 @@ const upload = multer({
 function normAircraft(a) {
   return {
     ...a,
-    financing_flag: Boolean(a.financing_flag),
-    total_hours_tsn:      a.total_hours_tsn      != null ? parseFloat(a.total_hours_tsn)      : null,
-    engine_hours:         a.engine_hours          != null ? parseFloat(a.engine_hours)          : null,
-    prop_hours:           a.prop_hours            != null ? parseFloat(a.prop_hours)            : null,
-    empty_weight_kg:      a.empty_weight_kg       != null ? parseFloat(a.empty_weight_kg)       : null,
-    useful_load_kg:       a.useful_load_kg        != null ? parseFloat(a.useful_load_kg)        : null,
-    next_inspection_hours:a.next_inspection_hours != null ? parseFloat(a.next_inspection_hours) : null,
+    financing_flag:        Boolean(a.financing_flag),
+    total_hours_tsn:       a.total_hours_tsn       != null ? parseFloat(a.total_hours_tsn)       : null,
+    engine_hours:          a.engine_hours           != null ? parseFloat(a.engine_hours)           : null,
+    prop_hours:            a.prop_hours             != null ? parseFloat(a.prop_hours)             : null,
+    empty_weight_kg:       a.empty_weight_kg        != null ? parseFloat(a.empty_weight_kg)        : null,
+    nose_wheel_weight:     a.nose_wheel_weight      != null ? parseFloat(a.nose_wheel_weight)      : null,
+    left_wheel_weight:     a.left_wheel_weight      != null ? parseFloat(a.left_wheel_weight)      : null,
+    right_wheel_weight:    a.right_wheel_weight     != null ? parseFloat(a.right_wheel_weight)     : null,
+    next_inspection_hours: a.next_inspection_hours  != null ? parseFloat(a.next_inspection_hours)  : null,
   };
 }
 
 const AIRCRAFT_SELECT = `
   id, fleet_number, bw_serial, aircraft_number, model, build_status,
   registration, country_code, country_name,
-  empty_weight_kg, useful_load_kg,
-  airworthiness_status, airworthiness_authority, airworthiness_expiry,
-  config_engine, config_prop, config_avionics, config_interior, config_paint,
+  empty_weight_kg, nose_wheel_weight, left_wheel_weight, right_wheel_weight,
+  airworthiness_status, airworthiness_expiry,
   total_hours_tsn, engine_hours, prop_hours,
   next_inspection_date, next_inspection_hours,
   customer_name, first_flight_date, delivery_date, financing_flag, notes,
   created_at, updated_at
 `;
 
-// ─── Aircraft CRUD ───────────────────────────────────────────────────────────
+// ─── Config Options (registered before /:id to avoid param capture) ───────────
 
-// GET /api/fleet
-router.get('/', async (req, res) => {
+// GET /api/fleet/config-options
+router.get('/config-options', async (_req, res) => {
   try {
     const rows = await query(
-      `SELECT ${AIRCRAFT_SELECT} FROM fleet_aircraft ORDER BY fleet_number ASC`
+      'SELECT * FROM fleet_config_options ORDER BY category, sort_order, label'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/fleet/config-options
+router.post('/config-options', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { category, label, sort_order = 0 } = req.body;
+  if (!category || !label) return res.status(400).json({ error: 'category and label are required' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_config_options (category, label, sort_order) VALUES (?,?,?)',
+      [category.trim(), label.trim(), sort_order]
+    );
+    const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/fleet/config-options/:oid
+router.put('/config-options/:oid', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { category, label, sort_order } = req.body;
+  try {
+    await query(
+      'UPDATE fleet_config_options SET category=?, label=?, sort_order=? WHERE id=?',
+      [category?.trim(), label?.trim(), sort_order ?? 0, req.params.oid]
+    );
+    const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [req.params.oid]);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/fleet/config-options/:oid
+router.delete('/config-options/:oid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_config_options WHERE id=?', [req.params.oid]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Aircraft CRUD ───────────────────────────────────────────────────────────
+
+// GET /api/fleet  — sorted by bw_serial
+router.get('/', async (_req, res) => {
+  try {
+    const rows = await query(
+      `SELECT ${AIRCRAFT_SELECT} FROM fleet_aircraft ORDER BY bw_serial ASC`
     );
     res.json(rows.map(normAircraft));
   } catch (err) {
@@ -75,9 +135,8 @@ router.post('/', requireRole('admin', 'supervisor'), async (req, res) => {
   const {
     bw_serial, aircraft_number, model, build_status = 'in_production',
     registration, country_code, country_name,
-    empty_weight_kg, useful_load_kg,
-    airworthiness_status, airworthiness_authority, airworthiness_expiry,
-    config_engine, config_prop, config_avionics, config_interior, config_paint,
+    empty_weight_kg, nose_wheel_weight, left_wheel_weight, right_wheel_weight,
+    airworthiness_status, airworthiness_expiry,
     total_hours_tsn, engine_hours, prop_hours,
     next_inspection_date, next_inspection_hours,
     customer_name, first_flight_date, delivery_date, financing_flag = false, notes,
@@ -87,7 +146,6 @@ router.post('/', requireRole('admin', 'supervisor'), async (req, res) => {
     return res.status(400).json({ error: 'bw_serial and model are required' });
   }
   try {
-    // Assign next fleet number
     const numRow = await query('SELECT COALESCE(MAX(fleet_number), 0) + 1 AS next_num FROM fleet_aircraft');
     const fleet_number = Number(numRow[0].next_num);
 
@@ -95,20 +153,18 @@ router.post('/', requireRole('admin', 'supervisor'), async (req, res) => {
       `INSERT INTO fleet_aircraft
        (fleet_number, bw_serial, aircraft_number, model, build_status,
         registration, country_code, country_name,
-        empty_weight_kg, useful_load_kg,
-        airworthiness_status, airworthiness_authority, airworthiness_expiry,
-        config_engine, config_prop, config_avionics, config_interior, config_paint,
+        empty_weight_kg, nose_wheel_weight, left_wheel_weight, right_wheel_weight,
+        airworthiness_status, airworthiness_expiry,
         total_hours_tsn, engine_hours, prop_hours,
         next_inspection_date, next_inspection_hours,
         customer_name, first_flight_date, delivery_date, financing_flag, notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         fleet_number, bw_serial.trim(), aircraft_number || null, model, build_status,
         registration || null, country_code?.toUpperCase() || null, country_name || null,
-        empty_weight_kg || null, useful_load_kg || null,
-        airworthiness_status || null, airworthiness_authority || null, airworthiness_expiry || null,
-        config_engine || null, config_prop || null, config_avionics || null,
-        config_interior || null, config_paint || null,
+        empty_weight_kg || null, nose_wheel_weight || null,
+        left_wheel_weight || null, right_wheel_weight || null,
+        airworthiness_status || null, airworthiness_expiry || null,
         total_hours_tsn || null, engine_hours || null, prop_hours || null,
         next_inspection_date || null, next_inspection_hours || null,
         customer_name || null, first_flight_date || null, delivery_date || null,
@@ -130,7 +186,7 @@ router.get('/:id', async (req, res) => {
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'Aircraft not found' });
     const aircraft = normAircraft(rows[0]);
 
-    const [contacts, serials, events, images] = await Promise.all([
+    const [contacts, serials, events, images, configRows] = await Promise.all([
       query('SELECT * FROM fleet_contacts WHERE aircraft_id = ? ORDER BY id', [req.params.id]),
       query('SELECT * FROM fleet_serial_numbers WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
       query(
@@ -140,23 +196,24 @@ router.get('/:id', async (req, res) => {
         [req.params.id]
       ),
       query('SELECT * FROM fleet_images WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
+      query('SELECT option_id FROM fleet_aircraft_config WHERE aircraft_id = ?', [req.params.id]),
     ]);
 
-    res.json({ ...aircraft, contacts, serials, events, images });
+    const selected_config = configRows.map(r => Number(r.option_id));
+    res.json({ ...aircraft, contacts, serials, events, images, selected_config });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// PUT /api/fleet/:id
+// PUT /api/fleet/:id — update main aircraft fields
 router.put('/:id', requireRole('admin', 'supervisor'), async (req, res) => {
   const fields = [
     'bw_serial', 'aircraft_number', 'model', 'build_status',
     'registration', 'country_code', 'country_name',
-    'empty_weight_kg', 'useful_load_kg',
-    'airworthiness_status', 'airworthiness_authority', 'airworthiness_expiry',
-    'config_engine', 'config_prop', 'config_avionics', 'config_interior', 'config_paint',
+    'empty_weight_kg', 'nose_wheel_weight', 'left_wheel_weight', 'right_wheel_weight',
+    'airworthiness_status', 'airworthiness_expiry',
     'total_hours_tsn', 'engine_hours', 'prop_hours',
     'next_inspection_date', 'next_inspection_hours',
     'customer_name', 'first_flight_date', 'delivery_date', 'financing_flag', 'notes',
@@ -182,6 +239,24 @@ router.put('/:id', requireRole('admin', 'supervisor'), async (req, res) => {
     const rows = await query(`SELECT ${AIRCRAFT_SELECT} FROM fleet_aircraft WHERE id = ?`, [req.params.id]);
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'Aircraft not found' });
     res.json(normAircraft(rows[0]));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/fleet/:id/config — replace selected config options
+router.put('/:id/config', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { option_ids = [] } = req.body;
+  try {
+    await query('DELETE FROM fleet_aircraft_config WHERE aircraft_id = ?', [req.params.id]);
+    if (option_ids.length > 0) {
+      const placeholders = option_ids.map(() => '(?,?)').join(',');
+      const vals = option_ids.flatMap(oid => [req.params.id, oid]);
+      await query(`INSERT INTO fleet_aircraft_config (aircraft_id, option_id) VALUES ${placeholders}`, vals);
+    }
+    const rows = await query('SELECT option_id FROM fleet_aircraft_config WHERE aircraft_id = ?', [req.params.id]);
+    res.json({ selected_config: rows.map(r => Number(r.option_id)) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -319,7 +394,6 @@ router.post('/:id/images', upload.single('image'), async (req, res) => {
     const rows = await query('SELECT * FROM fleet_images WHERE id = ?', [r.insertId]);
     res.status(201).json(rows[0]);
   } catch (err) {
-    // Remove uploaded file on DB error
     try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)); } catch {}
     console.error(err);
     res.status(500).json({ error: 'Server error' });

@@ -3,12 +3,15 @@ import {
   getUsers, createUser, updateUser,
   getTaskTemplates, getStations, createTemplate, updateTemplate,
   getAuditLog,
+  getFleetConfigOptions, createFleetConfigOption, updateFleetConfigOption, deleteFleetConfigOption,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Task Templates', 'Audit Log'];
+const TABS = ['Users', 'Task Templates', 'Fleet Config', 'Audit Log'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
+
+const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
 
 export default function AdminPanel() {
   const [tab, setTab] = useState(0);
@@ -38,7 +41,8 @@ export default function AdminPanel() {
 
       {tab === 0 && <UsersTab />}
       {tab === 1 && <TemplatesTab />}
-      {tab === 2 && <AuditTab />}
+      {tab === 2 && <FleetConfigTab />}
+      {tab === 3 && <AuditTab />}
     </div>
   );
 }
@@ -718,6 +722,206 @@ function TemplatesTab() {
         onSubmit={editTpl ? handleUpdate : handleCreate}
         onClose={closeModal}
       />
+    </div>
+  );
+}
+
+// ─── Fleet Config Tab ─────────────────────────────────────────────────────────
+function FleetConfigTab() {
+  const toast = useToast();
+  const [options, setOptions]   = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [editId,  setEditId]    = useState(null);   // option id being edited
+  const [editForm, setEditForm] = useState({});
+  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0 });
+  const [saving,   setSaving]   = useState(false);
+
+  useEffect(() => { loadOptions(); }, []);
+
+  async function loadOptions() {
+    setLoading(true);
+    try { const r = await getFleetConfigOptions(); setOptions(r.data); }
+    finally { setLoading(false); }
+  }
+
+  // Group by category
+  const grouped = options.reduce((acc, o) => {
+    if (!acc[o.category]) acc[o.category] = [];
+    acc[o.category].push(o);
+    return acc;
+  }, {});
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    const cat = addForm.category === '__custom__' ? addForm.custom_category.trim() : addForm.category;
+    if (!cat || !addForm.label.trim()) { toast.error('Category and label are required'); return; }
+    setSaving(true);
+    try {
+      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order });
+      setOptions(o => [...o, r.data].sort((a,b) => a.category.localeCompare(b.category) || a.sort_order - b.sort_order || a.label.localeCompare(b.label)));
+      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0 });
+      toast.success('Option added');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add');
+    } finally { setSaving(false); }
+  }
+
+  function startEdit(o) {
+    setEditId(o.id);
+    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order });
+  }
+
+  async function handleUpdate(oid) {
+    setSaving(true);
+    try {
+      const r = await updateFleetConfigOption(oid, editForm);
+      setOptions(o => o.map(x => x.id === oid ? r.data : x));
+      setEditId(null);
+      toast.success('Option updated');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update');
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete(oid) {
+    if (!window.confirm('Delete this option? Aircraft that have it selected will lose it.')) return;
+    try {
+      await deleteFleetConfigOption(oid);
+      setOptions(o => o.filter(x => x.id !== oid));
+      toast.success('Deleted');
+    } catch { toast.error('Delete failed'); }
+  }
+
+  const knownCategories = [...new Set(options.map(o => o.category))].sort();
+  const allCategories   = [...new Set([...CONFIG_CATEGORIES, ...knownCategories])].sort();
+
+  return (
+    <div>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
+        Manage the predefined configuration options that appear as checkboxes on each aircraft's Configuration tab.
+      </p>
+
+      {/* Add new option */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{ fontWeight: 700, marginBottom: 14 }}>Add Configuration Option</div>
+        <form onSubmit={handleAdd}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '0 0 180px' }}>
+              <label>Category</label>
+              <select value={addForm.category} onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))}>
+                <option value="">— Select —</option>
+                {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="__custom__">+ Custom category…</option>
+              </select>
+            </div>
+            {addForm.category === '__custom__' && (
+              <div className="form-group" style={{ flex: '0 0 160px' }}>
+                <label>Custom Category</label>
+                <input
+                  value={addForm.custom_category}
+                  onChange={e => setAddForm(f => ({ ...f, custom_category: e.target.value }))}
+                  placeholder="e.g. Fuel System"
+                />
+              </div>
+            )}
+            <div className="form-group" style={{ flex: '1 1 200px' }}>
+              <label>Option Label</label>
+              <input
+                value={addForm.label}
+                onChange={e => setAddForm(f => ({ ...f, label: e.target.value }))}
+                placeholder="e.g. Rotax 912 ULS 100hp"
+              />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 90px' }}>
+              <label>Order</label>
+              <input
+                type="number"
+                value={addForm.sort_order}
+                onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <label>&nbsp;</label>
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? 'Adding…' : '+ Add'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      {/* Grouped option list */}
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)' }}>Loading…</p>
+      ) : Object.keys(grouped).length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+          No configuration options yet. Add some above.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => (
+            <div key={cat} className="card" style={{ padding: 0 }}>
+              <div style={{ padding: '10px 16px', background: 'var(--bg-hover)', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>
+                {cat}
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Label</th>
+                      <th style={{ width: 70 }}>Order</th>
+                      <th style={{ width: 100 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {opts.map(o => (
+                      <tr key={o.id}>
+                        <td>
+                          {editId === o.id ? (
+                            <input
+                              autoFocus
+                              value={editForm.label}
+                              onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))}
+                              style={{ fontSize: 13 }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 13 }}>{o.label}</span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <input
+                              type="number"
+                              value={editForm.sort_order}
+                              onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))}
+                              style={{ fontSize: 13, width: 60 }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.sort_order}</span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-primary btn-sm" onClick={() => handleUpdate(o.id)} disabled={saving}>✓</button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-ghost btn-sm" onClick={() => startEdit(o)}>✎</button>
+                              <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(o.id)}>✕</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

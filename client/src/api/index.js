@@ -80,10 +80,16 @@ export const getDashboardStats  = () => api.get('/statistics/dashboard');
 export const exportCsv          = (p) => `/api/statistics/export/csv?${new URLSearchParams(p).toString()}`;
 
 // ─── Fleet / F5 Service ───────────────────────────────────────────────────────
-export const getFleetList      = ()        => api.get('/fleet');
-export const createFleetAircraft = (d)     => api.post('/fleet', d);
-export const getFleetAircraft  = (id)      => api.get(`/fleet/${id}`);
-export const updateFleetAircraft = (id, d) => api.put(`/fleet/${id}`, d);
+export const getFleetList        = ()        => api.get('/fleet');
+export const createFleetAircraft = (d)       => api.post('/fleet', d);
+export const getFleetAircraft    = (id)      => api.get(`/fleet/${id}`);
+export const updateFleetAircraft = (id, d)   => api.put(`/fleet/${id}`, d);
+export const saveFleetConfig     = (id, ids) => api.put(`/fleet/${id}/config`, { option_ids: ids });
+
+export const getFleetConfigOptions   = ()        => api.get('/fleet/config-options');
+export const createFleetConfigOption = (d)       => api.post('/fleet/config-options', d);
+export const updateFleetConfigOption = (oid, d)  => api.put(`/fleet/config-options/${oid}`, d);
+export const deleteFleetConfigOption = (oid)     => api.delete(`/fleet/config-options/${oid}`);
 
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
