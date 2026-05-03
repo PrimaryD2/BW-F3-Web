@@ -94,29 +94,94 @@ function InfoRow({ label, value, mono }) {
 function calcCG(nose, left, right) {
   const n = parseFloat(nose), l = parseFloat(left), r = parseFloat(right);
   if (!n || !l || !r || isNaN(n) || isNaN(l) || isNaN(r)) return null;
-  const totalWeight = n + l + r;
+  const totalWeight  = n + l + r;
   if (totalWeight <= 0) return null;
-  const totalMoment = n * (-796) + (l + r) * 601;
-  const cgMm = totalMoment / totalWeight;
-  const cgPct = (cgMm - 54) / 1121 * 100;
-  return { cgMm: cgMm.toFixed(1), cgPct: cgPct.toFixed(1), totalWeight: totalWeight.toFixed(1), ok: cgPct >= 15 && cgPct <= 20 };
+  const noseMoment   = n * (-796);
+  const leftMoment   = l * 601;
+  const rightMoment  = r * 601;
+  const totalMoment  = noseMoment + leftMoment + rightMoment;
+  const cgMm         = totalMoment / totalWeight;
+  const cgPct        = (cgMm - 54) / 1121 * 100;
+  return {
+    n, l, r,
+    noseMoment:  noseMoment.toFixed(1),
+    leftMoment:  leftMoment.toFixed(1),
+    rightMoment: rightMoment.toFixed(1),
+    totalMoment: totalMoment.toFixed(1),
+    totalWeight: totalWeight.toFixed(1),
+    cgMm:        cgMm.toFixed(1),
+    cgPct:       cgPct.toFixed(1),
+    ok:          cgPct >= 15 && cgPct <= 20,
+  };
+}
+
+function CGTable({ cg }) {
+  const mono = { fontFamily: 'monospace', fontSize: 13 };
+  const muted = { fontSize: 11, color: 'var(--text-muted)' };
+  const row = (label, weight, arm, moment, bold) => (
+    <tr style={bold ? { borderTop: '2px solid var(--border)' } : {}}>
+      <td style={{ fontSize: 13, fontWeight: bold ? 700 : 400, padding: '5px 8px' }}>{label}</td>
+      <td style={{ ...mono, textAlign: 'right', padding: '5px 8px' }}>
+        {weight != null ? weight : ''}
+      </td>
+      <td style={{ ...muted, textAlign: 'right', padding: '5px 8px' }}>
+        {arm}
+      </td>
+      <td style={{ ...mono, textAlign: 'right', padding: '5px 8px', fontWeight: bold ? 700 : 400 }}>
+        {moment}
+      </td>
+    </tr>
+  );
+
+  return (
+    <div style={{ marginTop: 12, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ background: 'var(--bg-hover)' }}>
+            <th style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textAlign: 'left',   padding: '5px 8px' }}>Point</th>
+            <th style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textAlign: 'right',  padding: '5px 8px' }}>Weight (kg)</th>
+            <th style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textAlign: 'right',  padding: '5px 8px' }}>Arm (mm)</th>
+            <th style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textAlign: 'right',  padding: '5px 8px' }}>Moment</th>
+          </tr>
+        </thead>
+        <tbody>
+          {row('Nose wheel',  cg.n.toFixed(1),  '−796', cg.noseMoment)}
+          {row('Left main',   cg.l.toFixed(1),  '601',  cg.leftMoment)}
+          {row('Right main',  cg.r.toFixed(1),  '601',  cg.rightMoment)}
+          {row('Total',       cg.totalWeight,   '—',    cg.totalMoment, true)}
+        </tbody>
+      </table>
+      <div style={{
+        padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        background: cg.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+        borderTop: `1px solid ${cg.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.35)'}`,
+      }}>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          CG position: <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--text-primary)' }}>{cg.cgMm} mm</span>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: 20, fontWeight: 800, color: cg.ok ? 'var(--success)' : 'var(--danger)' }}>{cg.cgPct}%</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>MAC (15–20% ✓)</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── W&B Section (top-level to avoid re-mount on parent re-render) ───────────
 
 function WBSection({ form, aircraft, canEdit, setF }) {
-  const cg = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
+  const cg     = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
+  const cgSaved = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
 
   return (
     <>
       <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Weight & Balance</div>
       {canEdit ? (
         <>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-            <FormField label="Empty Weight (kg)" half>
-              <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setF({ empty_weight_kg: e.target.value })} placeholder="Total empty weight" />
-            </FormField>
-          </div>
+          <FormField label="Empty Weight (kg)">
+            <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setF({ empty_weight_kg: e.target.value })} placeholder="Total empty weight" />
+          </FormField>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <FormField label="Nose Wheel (kg)" half>
               <input type="number" step="0.1" value={form.nose_wheel_weight} onChange={e => setF({ nose_wheel_weight: e.target.value })} placeholder="e.g. 120" />
@@ -128,25 +193,7 @@ function WBSection({ form, aircraft, canEdit, setF }) {
               <input type="number" step="0.1" value={form.right_wheel_weight} onChange={e => setF({ right_wheel_weight: e.target.value })} placeholder="e.g. 230" />
             </FormField>
           </div>
-          {cg && (
-            <div style={{
-              marginTop: 10, padding: '10px 14px', borderRadius: 8,
-              background: cg.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-              border: `1px solid ${cg.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.35)'}`,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>CG Position: </span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{cg.cgMm} mm</span>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 12 }}>Total: {cg.totalWeight} kg</span>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: cg.ok ? 'var(--success)' : 'var(--danger)' }}>{cg.cgPct}%</span>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>% MAC (15–20% OK)</div>
-                </div>
-              </div>
-            </div>
-          )}
+          {cg && <CGTable cg={cg} />}
         </>
       ) : (
         <>
@@ -154,20 +201,7 @@ function WBSection({ form, aircraft, canEdit, setF }) {
           <InfoRow label="Nose Wheel" value={aircraft.nose_wheel_weight != null ? `${aircraft.nose_wheel_weight} kg` : null} />
           <InfoRow label="Left Main" value={aircraft.left_wheel_weight != null ? `${aircraft.left_wheel_weight} kg` : null} />
           <InfoRow label="Right Main" value={aircraft.right_wheel_weight != null ? `${aircraft.right_wheel_weight} kg` : null} />
-          {(() => {
-            const cg2 = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
-            if (!cg2) return null;
-            return (
-              <div style={{
-                marginTop: 8, padding: '8px 12px', borderRadius: 8, display: 'flex', justifyContent: 'space-between',
-                background: cg2.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-                border: `1px solid ${cg2.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.35)'}`,
-              }}>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>CG: <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{cg2.cgMm} mm</span></span>
-                <span style={{ fontWeight: 700, color: cg2.ok ? 'var(--success)' : 'var(--danger)' }}>{cg2.cgPct}% MAC</span>
-              </div>
-            );
-          })()}
+          {cgSaved && <CGTable cg={cgSaved} />}
         </>
       )}
     </>
