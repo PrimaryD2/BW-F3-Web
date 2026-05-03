@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/airplanes',  label: 'Airplanes',  icon: '✈' },
   { to: '/ncr',        label: 'NCR',        icon: '⚠' },
   { to: '/statistics', label: 'Statistics', icon: '📊' },
+  { to: '/fleet',      label: 'F5 Service', icon: '🔧' },
 ];
 
 const ROLE_COLORS = { admin: 'var(--danger)', supervisor: 'var(--warning)', worker: 'var(--success)' };

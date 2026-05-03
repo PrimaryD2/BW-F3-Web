@@ -13,6 +13,8 @@ import NCRList from './pages/NCRList';
 import NCRDetail from './pages/NCRDetail';
 import Statistics from './pages/Statistics';
 import AdminPanel from './pages/AdminPanel';
+import FleetList from './pages/FleetList';
+import FleetDetail from './pages/FleetDetail';
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -40,6 +42,8 @@ function AppRoutes() {
         <Route path="ncr" element={<NCRList />} />
         <Route path="ncr/:id" element={<NCRDetail />} />
         <Route path="statistics" element={<Statistics />} />
+        <Route path="fleet" element={<FleetList />} />
+        <Route path="fleet/:id" element={<FleetDetail />} />
         <Route path="admin" element={
           <ProtectedRoute roles={['admin']}>
             <AdminPanel />

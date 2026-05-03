@@ -12,6 +12,7 @@ const ncrRoutes       = require('./routes/ncr');
 const adminRoutes     = require('./routes/admin');
 const statisticsRoutes = require('./routes/statistics');
 const pdfRoutes       = require('./routes/pdf');
+const fleetRoutes     = require('./routes/fleet');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -36,6 +37,10 @@ app.use('/api/ncr',         ncrRoutes);
 app.use('/api/admin',       adminRoutes);
 app.use('/api/statistics',  statisticsRoutes);
 app.use('/api/pdf',         pdfRoutes);
+app.use('/api/fleet',       fleetRoutes);
+
+// Serve uploaded fleet images
+app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 // ─── Serve React app in production ───────────────────────────────────────────
 const clientDist = path.join(__dirname, '../../client/dist');

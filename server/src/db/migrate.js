@@ -113,6 +113,98 @@ CREATE TABLE IF NOT EXISTS ncr_approvals (
   FOREIGN KEY (ncr_id) REFERENCES nonconformity_reports(id),
   FOREIGN KEY (approved_by) REFERENCES users(id)
 );
+
+-- ─── F5 Service / Fleet ───────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS fleet_aircraft (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  fleet_number INT NOT NULL UNIQUE,
+  bw_serial VARCHAR(50) NOT NULL,
+  aircraft_number VARCHAR(50) NULL,
+  model VARCHAR(100) NOT NULL,
+  build_status ENUM('in_production','completed','delivered','in_service','stored','for_sale','written_off') NOT NULL DEFAULT 'in_production',
+  registration VARCHAR(20) NULL,
+  country_code CHAR(2) NULL,
+  country_name VARCHAR(100) NULL,
+  -- Weight & Balance
+  empty_weight_kg DECIMAL(8,2) NULL,
+  useful_load_kg DECIMAL(8,2) NULL,
+  -- Airworthiness
+  airworthiness_status ENUM('active','expired','pending','unknown') NULL,
+  airworthiness_authority VARCHAR(100) NULL,
+  airworthiness_expiry DATE NULL,
+  -- Configuration
+  config_engine VARCHAR(200) NULL,
+  config_prop VARCHAR(200) NULL,
+  config_avionics TEXT NULL,
+  config_interior TEXT NULL,
+  config_paint VARCHAR(200) NULL,
+  -- Hours
+  total_hours_tsn DECIMAL(8,2) NULL,
+  engine_hours DECIMAL(8,2) NULL,
+  prop_hours DECIMAL(8,2) NULL,
+  -- Next inspection
+  next_inspection_date DATE NULL,
+  next_inspection_hours DECIMAL(8,2) NULL,
+  -- Owner / Customer
+  customer_name VARCHAR(200) NULL,
+  -- Key dates
+  first_flight_date DATE NULL,
+  delivery_date DATE NULL,
+  -- Flags
+  financing_flag BOOLEAN NOT NULL DEFAULT FALSE,
+  notes TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fleet_contacts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  role VARCHAR(100) NULL,
+  email VARCHAR(200) NULL,
+  phone VARCHAR(50) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fleet_serial_numbers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  component VARCHAR(100) NOT NULL,
+  serial_number VARCHAR(200) NOT NULL,
+  notes VARCHAR(300) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fleet_events (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  event_date DATE NOT NULL,
+  event_type ENUM('service','inspection','upgrade','incident','repaint','avionics_update','delivery','first_flight','other') NOT NULL DEFAULT 'other',
+  title VARCHAR(200) NOT NULL,
+  description TEXT NULL,
+  hours_at_event DECIMAL(8,2) NULL,
+  logged_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (logged_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS fleet_images (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  filename VARCHAR(300) NOT NULL,
+  caption VARCHAR(200) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  uploaded_by INT NULL,
+  uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.

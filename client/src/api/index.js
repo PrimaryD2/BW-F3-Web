@@ -79,6 +79,29 @@ export const getThroughput      = (p) => api.get('/statistics/throughput', { par
 export const getDashboardStats  = () => api.get('/statistics/dashboard');
 export const exportCsv          = (p) => `/api/statistics/export/csv?${new URLSearchParams(p).toString()}`;
 
+// ─── Fleet / F5 Service ───────────────────────────────────────────────────────
+export const getFleetList      = ()        => api.get('/fleet');
+export const createFleetAircraft = (d)     => api.post('/fleet', d);
+export const getFleetAircraft  = (id)      => api.get(`/fleet/${id}`);
+export const updateFleetAircraft = (id, d) => api.put(`/fleet/${id}`, d);
+
+export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
+export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
+export const deleteFleetContact = (id, cid)     => api.delete(`/fleet/${id}/contacts/${cid}`);
+
+export const addFleetSerial    = (id, d)        => api.post(`/fleet/${id}/serials`, d);
+export const updateFleetSerial = (id, sid, d)   => api.put(`/fleet/${id}/serials/${sid}`, d);
+export const deleteFleetSerial = (id, sid)      => api.delete(`/fleet/${id}/serials/${sid}`);
+
+export const addFleetEvent     = (id, d)        => api.post(`/fleet/${id}/events`, d);
+export const deleteFleetEvent  = (id, eid)      => api.delete(`/fleet/${id}/events/${eid}`);
+
+export const uploadFleetImage   = (id, formData) =>
+  api.post(`/fleet/${id}/images`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const updateFleetImageCaption = (id, iid, caption) =>
+  api.put(`/fleet/${id}/images/${iid}/caption`, { caption });
+export const deleteFleetImage   = (id, iid)     => api.delete(`/fleet/${id}/images/${iid}`);
+
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 export const pdfTaskSheet    = (airplaneId, stationId) => `/api/pdf/task-sheet/${airplaneId}/${stationId}`;
 export const pdfNcr          = (id) => `/api/pdf/ncr/${id}`;
