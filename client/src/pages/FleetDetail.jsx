@@ -306,40 +306,67 @@ function MaintenanceTab({
     return acc;
   }, {});
 
-  function calcNextDue(template, latest) {
+  function calcNextDue(template, latest, tsnHours) {
     let byDate = null, byHours = null;
-    if (latest) {
-      if (template.interval_months) {
-        const d = new Date(latest.completed_date);
-        d.setMonth(d.getMonth() + template.interval_months);
-        byDate = d;
-      }
-      if (template.interval_hours && latest.hours_at_completion != null) {
-        byHours = parseFloat(latest.hours_at_completion) + template.interval_hours;
+
+    // Date-based: add interval months to the last completion date
+    if (template.interval_months && latest) {
+      const d = new Date(latest.completed_date);
+      d.setMonth(d.getMonth() + template.interval_months);
+      byDate = d;
+    }
+
+    // Hours-based: fixed milestones (100h → 200h → 300h…)
+    // next milestone = (floor(lastH / interval) + 1) * interval
+    if (template.interval_hours) {
+      const interval = template.interval_hours;
+      if (latest && latest.hours_at_completion != null) {
+        const lastH = parseFloat(latest.hours_at_completion);
+        byHours = (Math.floor(lastH / interval) + 1) * interval;
+      } else if (tsnHours != null) {
+        // Never done (or done without hours): show next upcoming milestone
+        byHours = (Math.floor(tsnHours / interval) + 1) * interval;
       }
     }
+
     return { byDate, byHours };
   }
 
   function dueBadge(template, latest) {
-    const { byDate, byHours } = calcNextDue(template, latest);
-    const now = new Date();
     const tsn = aircraft.total_hours_tsn;
+    const now = new Date();
     let overdue = false, dueSoon = false;
 
-    if (byDate) {
-      const daysUntil = (byDate - now) / (1000 * 60 * 60 * 24);
-      if (daysUntil < 0) overdue = true;
-      else if (daysUntil <= 60) dueSoon = true;
-    }
-    if (byHours != null && tsn != null) {
-      const hoursUntil = byHours - tsn;
-      if (hoursUntil < 0) overdue = true;
-      else if (hoursUntil <= 20) dueSoon = true;
+    if (!latest) return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Never done</span>;
+
+    // ── Hours: fixed-milestone check (mirrors server logic) ───────────────
+    if (template.interval_hours != null && tsn != null) {
+      const interval    = template.interval_hours;
+      const lastDue     = Math.floor(tsn / interval) * interval;
+      const nextDue     = lastDue + interval;
+      const prevMilestone = lastDue - interval;
+      const lastH       = latest.hours_at_completion != null ? parseFloat(latest.hours_at_completion) : null;
+      const serviced    = lastH == null || lastH > prevMilestone; // null hours = trust the technician
+
+      if (lastDue > 0 && !serviced) {
+        overdue = true;
+      } else {
+        const hoursUntil = nextDue - tsn;
+        if (hoursUntil <= 0)  overdue = true;
+        else if (hoursUntil <= 20) dueSoon = true;
+      }
     }
 
-    if (!latest) return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Never done</span>;
-    if (overdue)  return <span className="badge badge-danger" style={{ fontSize: 10 }}>Overdue</span>;
+    // ── Date: only if hours didn't already set a flag ─────────────────────
+    if (!overdue && !dueSoon && template.interval_months) {
+      const d = new Date(latest.completed_date);
+      d.setMonth(d.getMonth() + template.interval_months);
+      const daysUntil = (d - now) / (1000 * 60 * 60 * 24);
+      if (daysUntil < 0)   overdue = true;
+      else if (daysUntil <= 60) dueSoon = true;
+    }
+
+    if (overdue)  return <span className="badge badge-danger"  style={{ fontSize: 10 }}>Overdue</span>;
     if (dueSoon)  return <span className="badge badge-warning" style={{ fontSize: 10 }}>Due soon</span>;
     return <span className="badge badge-success" style={{ fontSize: 10 }}>OK</span>;
   }
@@ -399,7 +426,7 @@ function MaintenanceTab({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {templates.map(t => {
                 const latest = latestByTemplate[t.id] || null;
-                const { byDate, byHours } = calcNextDue(t, latest);
+                const { byDate, byHours } = calcNextDue(t, latest, aircraft.total_hours_tsn);
                 const allRecords = recordsByTemplate[t.id] || [];
                 const isOpen = openForm === t.id;
 

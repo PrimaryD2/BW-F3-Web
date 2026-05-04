@@ -129,43 +129,81 @@ router.get('/upcoming-services', async (_req, res) => {
     const upcoming = [];
 
     for (const r of rows) {
-      const neverDone = !r.last_date; // no completion record at all
+      const tsn      = r.total_hours_tsn != null ? parseFloat(r.total_hours_tsn) : null;
+      const neverDone = !r.last_date; // no completion record exists at all
+      let pushed = false;
 
-      // ── Date-interval check ────────────────────────────────────────────────
-      if (r.interval_months) {
-        if (neverDone) {
-          // Never serviced — always flag regardless of hours
-          upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
-          continue;
+      // ── Hours-interval: fixed-milestone approach ───────────────────────────
+      // Milestones are at interval, 2×interval, 3×interval, …  (100h, 200h, 300h…)
+      // regardless of when the last service was actually performed.
+      if (r.interval_hours != null && tsn != null) {
+        const interval = r.interval_hours;
+
+        // Last milestone that was/is due (0 if TSN hasn't yet reached the first one)
+        const lastDue = Math.floor(tsn / interval) * interval;
+        const nextDue = lastDue + interval;
+
+        // The milestone boundary before lastDue — used to decide if the aircraft
+        // was serviced in the current interval window.
+        const prevMilestone = lastDue - interval; // may be 0 or negative (handled below)
+
+        const lastCompletedHours = r.last_hours != null ? parseFloat(r.last_hours) : null;
+
+        // "Serviced since last milestone" is true if:
+        //   • At least one completion exists (last_date set), AND
+        //   • Either we have no hours recorded (trust the technician), OR
+        //     the recorded hours fall after the previous milestone boundary
+        const servicedCurrentWindow =
+          !neverDone &&
+          (lastCompletedHours == null || lastCompletedHours > prevMilestone);
+
+        if (lastDue > 0 && !servicedCurrentWindow) {
+          // Overdue — the last due milestone was not covered by any service record
+          upcoming.push({
+            ...r,
+            due_date:    null,
+            due_hours:   lastDue,
+            hours_until: -(tsn - lastDue),
+            overdue:     true,
+          });
+          pushed = true;
+        } else {
+          // Either we're before the first milestone, or the last milestone was serviced.
+          // Alert if the NEXT milestone is within 20 hours.
+          const hoursUntil = nextDue - tsn;
+          if (hoursUntil <= 20) {
+            upcoming.push({
+              ...r,
+              due_date:    null,
+              due_hours:   nextDue,
+              hours_until: hoursUntil,
+              overdue:     false,
+            });
+            pushed = true;
+          }
         }
-        const d = new Date(r.last_date);
-        d.setMonth(d.getMonth() + r.interval_months);
-        const dueDateStr = d.toISOString().slice(0, 10);
-        const daysUntil  = Math.ceil((d - today) / 86400000);
-        if (daysUntil <= 60) {
-          upcoming.push({ ...r, due_date: dueDateStr, due_hours: null, days_until: daysUntil, overdue: daysUntil < 0 });
-          continue; // date-interval handled; skip hours check for this row
-        }
-        // Not due by date yet — fall through to hours check below
       }
 
-      // ── Hours-interval check ───────────────────────────────────────────────
-      if (r.interval_hours) {
+      // ── Date-interval: only fires when the hours check didn't already ──────
+      // (Prevents duplicate alerts for templates that have both intervals)
+      if (r.interval_months != null && !pushed) {
         if (neverDone) {
-          // Never serviced and no date interval already caught it — flag it
-          upcoming.push({ ...r, due_date: null, due_hours: r.interval_hours, hours_until: null, overdue: true });
-        } else if (r.last_hours != null) {
-          // Completion exists AND hours were recorded — calculate precisely
-          const dueHours   = parseFloat(r.last_hours) + r.interval_hours;
-          const tsn        = r.total_hours_tsn != null ? parseFloat(r.total_hours_tsn) : 0;
-          const hoursUntil = dueHours - tsn;
-          if (hoursUntil <= 20) {
-            upcoming.push({ ...r, due_date: null, due_hours: dueHours, hours_until: hoursUntil, overdue: hoursUntil < 0 });
+          upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
+        } else {
+          const d = new Date(r.last_date);
+          d.setMonth(d.getMonth() + r.interval_months);
+          const dueDateStr = d.toISOString().slice(0, 10);
+          const daysUntil  = Math.ceil((d - today) / 86400000);
+          if (daysUntil <= 60) {
+            upcoming.push({
+              ...r,
+              due_date:    dueDateStr,
+              due_hours:   null,
+              days_until:  daysUntil,
+              overdue:     daysUntil < 0,
+            });
           }
-          // else: not due yet — no alert
         }
-        // If last_hours is null but last_date exists: service was logged without hours.
-        // Can't calculate hours-based due time — skip hours alert for this entry.
       }
     }
 
