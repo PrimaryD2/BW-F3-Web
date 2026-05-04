@@ -358,7 +358,14 @@ function MaintenanceTab({
     }
 
     // ── Date: only if hours didn't already set a flag ─────────────────────
-    if (!overdue && !dueSoon && template.interval_months) {
+    // Skip the date check when an hours interval exists but the aircraft
+    // hasn't reached the first milestone yet (avoids premature "Due soon"
+    // on a brand-new aircraft with e.g. 25h TSN and a 100h/12-month service).
+    const hasHoursInterval    = template.interval_hours != null && tsn != null;
+    const pastFirstMilestone  = hasHoursInterval && tsn >= template.interval_hours;
+    const applyDateCheck      = !hasHoursInterval || pastFirstMilestone;
+
+    if (!overdue && !dueSoon && template.interval_months && applyDateCheck) {
       const d = new Date(latest.completed_date);
       d.setMonth(d.getMonth() + template.interval_months);
       const daysUntil = (d - now) / (1000 * 60 * 60 * 24);

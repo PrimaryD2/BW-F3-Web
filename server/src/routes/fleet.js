@@ -188,7 +188,17 @@ router.get('/upcoming-services', async (_req, res) => {
       // (Prevents duplicate alerts for templates that have both intervals)
       if (r.interval_months != null && !pushed) {
         if (neverDone) {
-          upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
+          // Only flag "never done" from the date side when:
+          //   • There is no hours interval (purely calendar-based service), OR
+          //   • The aircraft TSN has already passed the first hours milestone
+          //     (meaning it should have been done by now even by hours).
+          // This prevents alerting on e.g. a "100h OR 12-month" service for a
+          // brand-new aircraft that only has 25h TSN.
+          const hasHoursInterval  = r.interval_hours != null && tsn != null;
+          const pastFirstMilestone = hasHoursInterval && tsn >= r.interval_hours;
+          if (!hasHoursInterval || pastFirstMilestone) {
+            upcoming.push({ ...r, due_date: null, due_hours: null, days_until: null, overdue: true });
+          }
         } else {
           const d = new Date(r.last_date);
           d.setMonth(d.getMonth() + r.interval_months);
