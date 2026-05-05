@@ -35,7 +35,7 @@ function AppRoutes() {
       <Route path="/change-password" element={<ChangePassword />} />
 
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route index element={<Dashboard />} />
+        <Route index element={<Navigate to="/fleet" replace />} />
         <Route path="airplanes" element={<AirplaneList />} />
         <Route path="airplanes/:id" element={<AirplaneDetail />} />
         <Route path="airplanes/:airplaneId/station/:stationId" element={<StationView />} />
