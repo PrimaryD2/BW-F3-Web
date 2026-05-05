@@ -10,7 +10,7 @@ import {
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Configuration Config', 'Service Templates'];
+const TABS = ['Users', 'Configuration Config', 'Service Templates', 'Event Types'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -44,6 +44,7 @@ export default function AdminPanel() {
       {tab === 0 && <UsersTab />}
       {tab === 1 && <FleetConfigTab />}
       {tab === 2 && <ServiceTemplatesSection />}
+      {tab === 3 && <EventTypesSection />}
     </div>
   );
 }
@@ -924,8 +925,6 @@ function FleetConfigTab() {
         </div>
       )}
 
-      {/* ── Event Types ──────────────────────────────────────────────────────── */}
-      <EventTypesSection />
     </div>
   );
 }
@@ -993,7 +992,7 @@ function EventTypesSection() {
   }
 
   return (
-    <div style={{ marginTop: 32 }}>
+    <div>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Event Types</div>
       <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
         Define the types that appear in the event type dropdown on each aircraft's Events tab.

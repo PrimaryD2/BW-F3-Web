@@ -9,13 +9,31 @@ import {
   getFleetConfigOptions, saveFleetConfig,
   getFleetServiceTemplates, completeFleetService, deleteFleetServiceRecord,
   getFleetEventTypes,
+  uploadFleetPaperwork, updateFleetPaperwork, deleteFleetPaperwork, paperworkDownloadUrl,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TABS = ['Overview', 'Configuration', 'Maintenance', 'Components', 'Events', 'Gallery', 'Contacts'];
+const TABS = ['Overview', 'Configuration', 'Maintenance', 'Components', 'Events', 'Gallery', 'Paperwork', 'Contacts'];
+
+const PAPERWORK_CATEGORIES = ['Airworthiness', 'Registration', 'Insurance', 'Weight & Balance', 'Manual / POH', 'Logbook', 'Inspection Report', 'Other'];
+
+function fileIcon(mimetype = '') {
+  if (mimetype.startsWith('image/'))      return '🖼️';
+  if (mimetype === 'application/pdf')     return '📄';
+  if (mimetype.includes('word') || mimetype.includes('document')) return '📝';
+  if (mimetype.includes('excel') || mimetype.includes('sheet'))   return '📊';
+  return '📎';
+}
+
+function fmtBytes(n) {
+  if (!n) return '';
+  if (n < 1024)             return `${n} B`;
+  if (n < 1024 * 1024)      return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 const AIRCRAFT_EDIT_TABS = new Set(['Overview', 'Maintenance']); // tabs that save via handleSave
 
 const BUILD_STATUS_BADGE = {
@@ -669,10 +687,11 @@ export default function FleetDetail() {
   const [dirty, setDirty]     = useState(false);
 
   // Sub-resources
-  const [contacts, setContacts] = useState([]);
-  const [serials,  setSerials]  = useState([]);
-  const [events,   setEvents]   = useState([]);
-  const [images,   setImages]   = useState([]);
+  const [contacts,   setContacts]   = useState([]);
+  const [serials,    setSerials]    = useState([]);
+  const [events,     setEvents]     = useState([]);
+  const [images,     setImages]     = useState([]);
+  const [paperwork,  setPaperwork]  = useState([]);
 
   // Configuration options (from admin panel)
   const [configOptions,   setConfigOptions]   = useState([]);
@@ -703,6 +722,14 @@ export default function FleetDetail() {
   const [imgUploading, setImgUploading] = useState(false);
   const [captionEdit,  setCaptionEdit]  = useState({});
 
+  // Paperwork upload
+  const paperworkInputRef  = useRef(null);
+  const [pwUploading,  setPwUploading]  = useState(false);
+  const [pwTitle,      setPwTitle]      = useState('');
+  const [pwCategory,   setPwCategory]   = useState('');
+  const [pwEditId,     setPwEditId]     = useState(null);
+  const [pwEditForm,   setPwEditForm]   = useState({});
+
   // ─── Load ──────────────────────────────────────────────────────────────────
 
   useEffect(() => { load(); }, [id]);
@@ -727,10 +754,11 @@ export default function FleetDetail() {
 
   function applyData(a) {
     setAircraft(a);
-    setContacts(a.contacts || []);
-    setSerials(a.serials   || []);
-    setEvents(a.events     || []);
-    setImages(a.images     || []);
+    setContacts(a.contacts    || []);
+    setSerials(a.serials      || []);
+    setEvents(a.events        || []);
+    setImages(a.images        || []);
+    setPaperwork(a.paperwork  || []);
     setServiceRecords(a.service_records || []);
     setSelectedConfig(new Set((a.selected_config || []).map(Number)));
     setConfigDirty(false);
@@ -923,6 +951,48 @@ export default function FleetDetail() {
     } catch { toast.error('Failed to set cover'); }
   }
 
+  // ─── Paperwork ─────────────────────────────────────────────────────────────
+
+  async function handlePaperworkUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPwUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (pwTitle.trim())    fd.append('title',    pwTitle.trim());
+      if (pwCategory.trim()) fd.append('category', pwCategory.trim());
+      const res = await uploadFleetPaperwork(id, fd);
+      setPaperwork(pw => [res.data, ...pw]);
+      setPwTitle('');
+      setPwCategory('');
+      toast.success('File uploaded');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setPwUploading(false);
+      e.target.value = '';
+    }
+  }
+
+  async function handlePaperworkUpdate(pid) {
+    try {
+      const res = await updateFleetPaperwork(id, pid, pwEditForm);
+      setPaperwork(pw => pw.map(x => x.id === pid ? res.data : x));
+      setPwEditId(null);
+      toast.success('Updated');
+    } catch { toast.error('Update failed'); }
+  }
+
+  async function handlePaperworkDelete(pid) {
+    if (!window.confirm('Delete this document?')) return;
+    try {
+      await deleteFleetPaperwork(id, pid);
+      setPaperwork(pw => pw.filter(x => x.id !== pid));
+      toast.success('Deleted');
+    } catch { toast.error('Delete failed'); }
+  }
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -1020,6 +1090,9 @@ export default function FleetDetail() {
             )}
             {t === 'Gallery' && images.length > 0 && (
               <span style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-hover)', borderRadius: 10, padding: '1px 6px' }}>{images.length}</span>
+            )}
+            {t === 'Paperwork' && paperwork.length > 0 && (
+              <span style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-hover)', borderRadius: 10, padding: '1px 6px' }}>{paperwork.length}</span>
             )}
             {t === 'Contacts' && contacts.length > 0 && (
               <span style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-hover)', borderRadius: 10, padding: '1px 6px' }}>{contacts.length}</span>
@@ -1483,6 +1556,181 @@ export default function FleetDetail() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── PAPERWORK ────────────────────────────────────────────────────────── */}
+      {tab === 'Paperwork' && (
+        <div>
+          {/* Upload bar */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, marginBottom: 14 }}>Upload Document</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="form-group" style={{ flex: '1 1 200px', marginBottom: 0 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Title (optional)</label>
+                <input
+                  value={pwTitle}
+                  onChange={e => setPwTitle(e.target.value)}
+                  placeholder="e.g. Annual Inspection Report 2024"
+                  disabled={pwUploading}
+                />
+              </div>
+              <div className="form-group" style={{ flex: '0 0 180px', marginBottom: 0 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Category</label>
+                <select value={pwCategory} onChange={e => setPwCategory(e.target.value)} disabled={pwUploading}>
+                  <option value="">— None —</option>
+                  {PAPERWORK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: '0 0 auto', paddingBottom: 1 }}>
+                {pwUploading
+                  ? <span style={{ fontSize: 13, color: 'var(--text-muted)', display: 'block', paddingBottom: 8 }}>Uploading…</span>
+                  : (
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => paperworkInputRef.current?.click()}
+                    >
+                      📎 Choose File
+                    </button>
+                  )
+                }
+                <input
+                  ref={paperworkInputRef}
+                  type="file"
+                  accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  style={{ display: 'none' }}
+                  onChange={handlePaperworkUpload}
+                />
+              </div>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, marginBottom: 0 }}>
+              Accepted: images, PDF, Word, Excel, plain text — max 50 MB
+            </p>
+          </div>
+
+          {/* Document list */}
+          {paperwork.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📁</div>
+              <div>No documents uploaded yet.</div>
+            </div>
+          ) : (
+            <div className="card" style={{ padding: 0 }}>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 36 }}></th>
+                      <th>Document</th>
+                      <th style={{ width: 160 }}>Category</th>
+                      <th style={{ width: 80 }}>Size</th>
+                      <th style={{ width: 130 }}>Uploaded</th>
+                      <th style={{ width: 120 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paperwork.map(doc => (
+                      <tr key={doc.id}>
+                        {/* Icon */}
+                        <td style={{ textAlign: 'center', fontSize: 18 }}>
+                          {fileIcon(doc.mimetype)}
+                        </td>
+
+                        {/* Title / filename */}
+                        <td>
+                          {pwEditId === doc.id ? (
+                            <input
+                              autoFocus
+                              value={pwEditForm.title}
+                              onChange={e => setPwEditForm(f => ({ ...f, title: e.target.value }))}
+                              placeholder="Title"
+                              style={{ fontSize: 13, width: '100%' }}
+                            />
+                          ) : (
+                            <>
+                              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                                {doc.title || doc.original_name}
+                              </div>
+                              {doc.title && (
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{doc.original_name}</div>
+                              )}
+                              {doc.uploaded_by_name && (
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>by {doc.uploaded_by_name}</div>
+                              )}
+                            </>
+                          )}
+                        </td>
+
+                        {/* Category */}
+                        <td>
+                          {pwEditId === doc.id ? (
+                            <select
+                              value={pwEditForm.category || ''}
+                              onChange={e => setPwEditForm(f => ({ ...f, category: e.target.value }))}
+                              style={{ fontSize: 12 }}
+                            >
+                              <option value="">— None —</option>
+                              {PAPERWORK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : (
+                            doc.category
+                              ? <span className="badge badge-ghost" style={{ fontSize: 10 }}>{doc.category}</span>
+                              : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
+                          )}
+                        </td>
+
+                        {/* Size */}
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                          {fmtBytes(doc.size_bytes)}
+                        </td>
+
+                        {/* Date */}
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                          {new Date(doc.uploaded_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </td>
+
+                        {/* Actions */}
+                        <td>
+                          {pwEditId === doc.id ? (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button className="btn btn-primary btn-sm" onClick={() => handlePaperworkUpdate(doc.id)}>✓</button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => setPwEditId(null)}>✕</button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <a
+                                href={paperworkDownloadUrl(doc.id)}
+                                download={doc.original_name}
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: 11, padding: '3px 8px' }}
+                                title="Download"
+                              >⬇</a>
+                              {canEdit && (
+                                <>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: 11, padding: '3px 6px' }}
+                                    title="Edit title / category"
+                                    onClick={() => { setPwEditId(doc.id); setPwEditForm({ title: doc.title || '', category: doc.category || '' }); }}
+                                  >✎</button>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ fontSize: 11, padding: '3px 6px', color: 'var(--danger)' }}
+                                    title="Delete"
+                                    onClick={() => handlePaperworkDelete(doc.id)}
+                                  >✕</button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

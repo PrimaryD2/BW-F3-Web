@@ -123,6 +123,13 @@ export const updateFleetImageCaption = (id, iid, caption) =>
 export const setFleetImageCover  = (id, iid)    => api.put(`/fleet/${id}/images/${iid}/cover`);
 export const deleteFleetImage    = (id, iid)    => api.delete(`/fleet/${id}/images/${iid}`);
 
+export const getFleetPaperwork    = (id)         => api.get(`/fleet/${id}/paperwork`);
+export const uploadFleetPaperwork = (id, formData) =>
+  api.post(`/fleet/${id}/paperwork`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const updateFleetPaperwork = (id, pid, d) => api.put(`/fleet/${id}/paperwork/${pid}`, d);
+export const deleteFleetPaperwork = (id, pid)    => api.delete(`/fleet/${id}/paperwork/${pid}`);
+export const paperworkDownloadUrl = (pid)        => `/api/fleet/paperwork/${pid}/download`;
+
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 export const pdfTaskSheet    = (airplaneId, stationId) => `/api/pdf/task-sheet/${airplaneId}/${stationId}`;
 export const pdfNcr          = (id) => `/api/pdf/ncr/${id}`;

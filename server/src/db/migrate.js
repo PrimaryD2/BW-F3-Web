@@ -256,6 +256,21 @@ CREATE TABLE IF NOT EXISTS fleet_event_types (
   sort_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fleet_paperwork (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id   INT          NOT NULL,
+  filename      VARCHAR(300) NOT NULL,
+  original_name VARCHAR(300) NOT NULL,
+  mimetype      VARCHAR(100) NOT NULL DEFAULT '',
+  size_bytes    INT          NOT NULL DEFAULT 0,
+  title         VARCHAR(200) NULL,
+  category      VARCHAR(100) NULL,
+  uploaded_by   INT          NULL,
+  uploaded_at   TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.

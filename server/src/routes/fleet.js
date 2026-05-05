@@ -29,6 +29,28 @@ const upload = multer({
   },
 });
 
+// ─── Paperwork upload via multer ──────────────────────────────────────────────
+const PAPERWORK_DIR = path.join(__dirname, '../../uploads/paperwork');
+if (!fs.existsSync(PAPERWORK_DIR)) fs.mkdirSync(PAPERWORK_DIR, { recursive: true });
+
+const paperworkStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, PAPERWORK_DIR),
+  filename: (_req, file, cb) => {
+    const ext  = path.extname(file.originalname).toLowerCase();
+    const base = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    cb(null, base + ext);
+  },
+});
+const ALLOWED_PAPERWORK = /^(image\/|application\/pdf$|application\/msword$|application\/vnd\.|text\/plain$)/i;
+const uploadPaperwork = multer({
+  storage: paperworkStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_PAPERWORK.test(file.mimetype)) cb(null, true);
+    else cb(new Error('File type not allowed'));
+  },
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function normAircraft(a) {
   return {
@@ -419,7 +441,7 @@ router.get('/:id', async (req, res) => {
     if (!rows || rows.length === 0) return res.status(404).json({ error: 'Aircraft not found' });
     const aircraft = normAircraft(rows[0]);
 
-    const [contacts, serials, events, images, configRows, serviceRecords] = await Promise.all([
+    const [contacts, serials, events, images, configRows, serviceRecords, paperwork] = await Promise.all([
       query('SELECT * FROM fleet_contacts WHERE aircraft_id = ? ORDER BY id', [req.params.id]),
       query('SELECT * FROM fleet_serial_numbers WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
       query(
@@ -436,10 +458,16 @@ router.get('/:id', async (req, res) => {
          WHERE fsr.aircraft_id = ? ORDER BY fsr.completed_date DESC, fsr.id DESC`,
         [req.params.id]
       ),
+      query(
+        `SELECT fp.*, u.name AS uploaded_by_name FROM fleet_paperwork fp
+         LEFT JOIN users u ON fp.uploaded_by = u.id
+         WHERE fp.aircraft_id = ? ORDER BY fp.uploaded_at DESC`,
+        [req.params.id]
+      ),
     ]);
 
     const selected_config = configRows.map(r => Number(r.option_id));
-    res.json({ ...aircraft, contacts, serials, events, images, selected_config, service_records: serviceRecords });
+    res.json({ ...aircraft, contacts, serials, events, images, selected_config, service_records: serviceRecords, paperwork });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -708,6 +736,98 @@ router.delete('/:id/images/:iid', requireRole('admin', 'supervisor'), async (req
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// ─── Paperwork ────────────────────────────────────────────────────────────────
+
+// GET /api/fleet/:id/paperwork
+router.get('/:id/paperwork', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT fp.*, u.name AS uploaded_by_name
+       FROM fleet_paperwork fp
+       LEFT JOIN users u ON fp.uploaded_by = u.id
+       WHERE fp.aircraft_id = ?
+       ORDER BY fp.uploaded_at DESC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/fleet/:id/paperwork
+router.post('/:id/paperwork', requireRole('admin', 'supervisor'), uploadPaperwork.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+  const { title, category } = req.body;
+  try {
+    const r = await query(
+      `INSERT INTO fleet_paperwork
+         (aircraft_id, filename, original_name, mimetype, size_bytes, title, category, uploaded_by)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [
+        req.params.id,
+        req.file.filename,
+        req.file.originalname,
+        req.file.mimetype,
+        req.file.size,
+        title?.trim() || null,
+        category?.trim() || null,
+        req.user.id,
+      ]
+    );
+    const rows = await query(
+      `SELECT fp.*, u.name AS uploaded_by_name FROM fleet_paperwork fp
+       LEFT JOIN users u ON fp.uploaded_by = u.id WHERE fp.id = ?`,
+      [r.insertId]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    try { fs.unlinkSync(path.join(PAPERWORK_DIR, req.file.filename)); } catch {}
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/fleet/:id/paperwork/:pid — update title / category
+router.put('/:id/paperwork/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { title, category } = req.body;
+  try {
+    await query(
+      'UPDATE fleet_paperwork SET title=?, category=? WHERE id=? AND aircraft_id=?',
+      [title?.trim() || null, category?.trim() || null, req.params.pid, req.params.id]
+    );
+    const rows = await query(
+      `SELECT fp.*, u.name AS uploaded_by_name FROM fleet_paperwork fp
+       LEFT JOIN users u ON fp.uploaded_by = u.id WHERE fp.id = ?`,
+      [req.params.pid]
+    );
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// DELETE /api/fleet/:id/paperwork/:pid
+router.delete('/:id/paperwork/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    const rows = await query(
+      'SELECT filename FROM fleet_paperwork WHERE id=? AND aircraft_id=?',
+      [req.params.pid, req.params.id]
+    );
+    if (rows && rows.length > 0) {
+      await query('DELETE FROM fleet_paperwork WHERE id=? AND aircraft_id=?', [req.params.pid, req.params.id]);
+      try { fs.unlinkSync(path.join(PAPERWORK_DIR, rows[0].filename)); } catch {}
+    }
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// GET /api/fleet/paperwork/:pid/download — serve file with original filename
+router.get('/paperwork/:pid/download', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_paperwork WHERE id=?', [req.params.pid]);
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const doc = rows[0];
+    res.download(path.join(PAPERWORK_DIR, doc.filename), doc.original_name);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
 module.exports = router;
