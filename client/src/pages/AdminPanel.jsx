@@ -9,7 +9,7 @@ import {
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Task Templates', 'Fleet Config', 'Audit Log'];
+const TABS = ['Users', 'Configuration Config', 'Service Templates'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -21,7 +21,7 @@ export default function AdminPanel() {
       <div className="page-header">
         <div>
           <div className="page-title">Admin Panel</div>
-          <div className="page-subtitle">Manage users, task templates, and view audit history</div>
+          <div className="page-subtitle">Manage users, configuration options, and service templates</div>
         </div>
       </div>
 
@@ -41,9 +41,8 @@ export default function AdminPanel() {
       </div>
 
       {tab === 0 && <UsersTab />}
-      {tab === 1 && <TemplatesTab />}
-      {tab === 2 && <FleetConfigTab />}
-      {tab === 3 && <AuditTab />}
+      {tab === 1 && <FleetConfigTab />}
+      {tab === 2 && <ServiceTemplatesSection />}
     </div>
   );
 }
@@ -924,8 +923,6 @@ function FleetConfigTab() {
         </div>
       )}
 
-      {/* ── Service Templates ─────────────────────────────────────────────────── */}
-      <ServiceTemplatesSection />
     </div>
   );
 }
@@ -992,9 +989,8 @@ function ServiceTemplatesSection() {
   }
 
   return (
-    <div style={{ marginTop: 32 }}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Service Templates</div>
-      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
         Define recurring maintenance tasks for engine and airframe. These appear as a checklist on each aircraft's Maintenance tab.
       </p>
 
