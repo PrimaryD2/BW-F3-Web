@@ -277,7 +277,7 @@ router.get('/gallery', async (_req, res) => {
         fa.registration, fa.country_code, fa.country_name, fa.build_status,
         (SELECT fi.filename FROM fleet_images fi
          WHERE fi.aircraft_id = fa.id
-         ORDER BY fi.sort_order ASC, fi.id ASC LIMIT 1) AS cover_image
+         ORDER BY fi.is_cover DESC, fi.sort_order ASC, fi.id ASC LIMIT 1) AS cover_image
       FROM fleet_aircraft fa
       ORDER BY
         CASE WHEN fa.aircraft_number REGEXP '^[0-9]+$'
@@ -677,6 +677,19 @@ router.put('/:id/images/:iid/caption', async (req, res) => {
     );
     const rows = await query('SELECT * FROM fleet_images WHERE id = ?', [req.params.iid]);
     res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/fleet/:id/images/:iid/cover — set one image as the cover, clear others
+router.put('/:id/images/:iid/cover', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('UPDATE fleet_images SET is_cover = FALSE WHERE aircraft_id = ?', [req.params.id]);
+    await query('UPDATE fleet_images SET is_cover = TRUE  WHERE id = ? AND aircraft_id = ?', [req.params.iid, req.params.id]);
+    const rows = await query('SELECT * FROM fleet_images WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]);
+    res.json(rows);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });

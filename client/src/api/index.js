@@ -120,7 +120,8 @@ export const uploadFleetImage   = (id, formData) =>
   api.post(`/fleet/${id}/images`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const updateFleetImageCaption = (id, iid, caption) =>
   api.put(`/fleet/${id}/images/${iid}/caption`, { caption });
-export const deleteFleetImage   = (id, iid)     => api.delete(`/fleet/${id}/images/${iid}`);
+export const setFleetImageCover  = (id, iid)    => api.put(`/fleet/${id}/images/${iid}/cover`);
+export const deleteFleetImage    = (id, iid)    => api.delete(`/fleet/${id}/images/${iid}`);
 
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 export const pdfTaskSheet    = (airplaneId, stationId) => `/api/pdf/task-sheet/${airplaneId}/${stationId}`;

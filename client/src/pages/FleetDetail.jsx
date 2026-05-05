@@ -5,7 +5,7 @@ import {
   addFleetContact, updateFleetContact, deleteFleetContact,
   addFleetSerial, deleteFleetSerial,
   addFleetEvent, deleteFleetEvent,
-  uploadFleetImage, updateFleetImageCaption, deleteFleetImage,
+  uploadFleetImage, updateFleetImageCaption, setFleetImageCover, deleteFleetImage,
   getFleetConfigOptions, saveFleetConfig,
   getFleetServiceTemplates, completeFleetService, deleteFleetServiceRecord,
   getFleetEventTypes,
@@ -915,6 +915,14 @@ export default function FleetDetail() {
     } catch { toast.error('Delete failed'); }
   }
 
+  async function handleSetCover(imgId) {
+    try {
+      const res = await setFleetImageCover(id, imgId);
+      setImages(res.data); // server returns full updated list
+      toast.success('Cover photo set');
+    } catch { toast.error('Failed to set cover'); }
+  }
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -1393,15 +1401,29 @@ export default function FleetDetail() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
               {images.map(img => {
                 const isEditing = img.id in captionEdit;
+                const isCover   = Boolean(img.is_cover);
                 return (
-                  <div key={img.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <img
-                      src={`/uploads/fleet/${img.filename}`}
-                      alt={img.caption || 'Aircraft photo'}
-                      style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }}
-                      onClick={() => window.open(`/uploads/fleet/${img.filename}`, '_blank')}
-                      onError={e => { e.target.style.display = 'none'; }}
-                    />
+                  <div key={img.id} className="card" style={{ padding: 0, overflow: 'hidden', outline: isCover ? '2px solid var(--accent)' : 'none' }}>
+                    {/* Image with cover badge overlay */}
+                    <div style={{ position: 'relative' }}>
+                      <img
+                        src={`/uploads/fleet/${img.filename}`}
+                        alt={img.caption || 'Aircraft photo'}
+                        style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block', cursor: 'pointer' }}
+                        onClick={() => window.open(`/uploads/fleet/${img.filename}`, '_blank')}
+                        onError={e => { e.target.style.display = 'none'; }}
+                      />
+                      {isCover && (
+                        <div style={{
+                          position: 'absolute', top: 8, left: 8,
+                          background: 'var(--accent)', color: '#fff',
+                          fontSize: 10, fontWeight: 700, padding: '3px 8px',
+                          borderRadius: 20, letterSpacing: '0.04em',
+                        }}>
+                          ★ Cover
+                        </div>
+                      )}
+                    </div>
                     <div style={{ padding: '10px 12px' }}>
                       {isEditing ? (
                         <div style={{ display: 'flex', gap: 6 }}>
@@ -1419,31 +1441,43 @@ export default function FleetDetail() {
                           <button className="btn btn-primary btn-sm" onClick={() => handleSaveCaption(img.id)}>✓</button>
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                          <span
-                            style={{ fontSize: 12, color: img.caption ? 'var(--text-secondary)' : 'var(--text-muted)', flex: 1, cursor: 'pointer' }}
-                            onClick={() => setCaptionEdit(c => ({ ...c, [img.id]: img.caption || '' }))}
-                            title="Click to edit caption"
-                          >
-                            {img.caption || 'Add caption…'}
-                          </span>
-                          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              style={{ padding: '2px 6px', fontSize: 11 }}
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: canEdit ? 6 : 0 }}>
+                            <span
+                              style={{ fontSize: 12, color: img.caption ? 'var(--text-secondary)' : 'var(--text-muted)', flex: 1, cursor: 'pointer' }}
                               onClick={() => setCaptionEdit(c => ({ ...c, [img.id]: img.caption || '' }))}
-                              title="Edit caption"
-                            >✎</button>
-                            {canEdit && (
+                              title="Click to edit caption"
+                            >
+                              {img.caption || 'Add caption…'}
+                            </span>
+                            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                               <button
                                 className="btn btn-ghost btn-sm"
-                                style={{ padding: '2px 6px', fontSize: 11, color: 'var(--danger)' }}
-                                onClick={() => handleDeleteImage(img.id)}
-                                title="Delete image"
-                              >✕</button>
-                            )}
+                                style={{ padding: '2px 6px', fontSize: 11 }}
+                                onClick={() => setCaptionEdit(c => ({ ...c, [img.id]: img.caption || '' }))}
+                                title="Edit caption"
+                              >✎</button>
+                              {canEdit && (
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  style={{ padding: '2px 6px', fontSize: 11, color: 'var(--danger)' }}
+                                  onClick={() => handleDeleteImage(img.id)}
+                                  title="Delete image"
+                                >✕</button>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                          {canEdit && !isCover && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ width: '100%', fontSize: 11, color: 'var(--text-muted)', justifyContent: 'center' }}
+                              onClick={() => handleSetCover(img.id)}
+                              title="Use as cover in Aircraft Gallery"
+                            >
+                              ☆ Set as Cover
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

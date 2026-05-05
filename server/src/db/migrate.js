@@ -282,6 +282,8 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS right_wheel_weight DECIMAL(8,2) NULL`,
   // Fleet event type column widening
   `ALTER TABLE fleet_events MODIFY COLUMN event_type VARCHAR(100) NOT NULL DEFAULT 'other'`,
+  // Cover image flag for aircraft gallery
+  `ALTER TABLE fleet_images ADD COLUMN IF NOT EXISTS is_cover BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
 async function migrate() {
