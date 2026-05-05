@@ -8,6 +8,7 @@ import {
   uploadFleetImage, updateFleetImageCaption, deleteFleetImage,
   getFleetConfigOptions, saveFleetConfig,
   getFleetServiceTemplates, completeFleetService, deleteFleetServiceRecord,
+  getFleetEventTypes,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -177,6 +178,17 @@ function CGTable({ cg }) {
 
 // ─── W&B Section (top-level to avoid re-mount on parent re-render) ───────────
 
+// Helper to auto-calc total when any wheel changes
+function handleWheel(key, val, currentForm, setF) {
+  const patch = { [key]: val };
+  // compute from whichever values are available after this change
+  const n = key === 'nose_wheel_weight'  ? parseFloat(val) : parseFloat(currentForm.nose_wheel_weight);
+  const l = key === 'left_wheel_weight'  ? parseFloat(val) : parseFloat(currentForm.left_wheel_weight);
+  const r = key === 'right_wheel_weight' ? parseFloat(val) : parseFloat(currentForm.right_wheel_weight);
+  if (!isNaN(n) && !isNaN(l) && !isNaN(r)) patch.empty_weight_kg = (n + l + r).toFixed(1);
+  setF(patch);
+}
+
 function WBSection({ form, aircraft, canEdit, setF }) {
   const cg      = calcCG(form.nose_wheel_weight, form.left_wheel_weight, form.right_wheel_weight);
   const cgSaved = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
@@ -186,25 +198,26 @@ function WBSection({ form, aircraft, canEdit, setF }) {
       <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Weight & Balance</div>
       {canEdit ? (
         <>
-          <FormField label="Empty Weight (kg)">
-            <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setF({ empty_weight_kg: e.target.value })} placeholder="Total empty weight" />
-          </FormField>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <FormField label="Nose Wheel (kg)" half>
-              <input type="number" step="0.1" value={form.nose_wheel_weight} onChange={e => setF({ nose_wheel_weight: e.target.value })} placeholder="e.g. 120" />
+              <input type="number" step="0.1" value={form.nose_wheel_weight} onChange={e => handleWheel('nose_wheel_weight', e.target.value, form, setF)} placeholder="e.g. 120" />
             </FormField>
             <FormField label="Left Main (kg)" half>
-              <input type="number" step="0.1" value={form.left_wheel_weight} onChange={e => setF({ left_wheel_weight: e.target.value })} placeholder="e.g. 230" />
+              <input type="number" step="0.1" value={form.left_wheel_weight} onChange={e => handleWheel('left_wheel_weight', e.target.value, form, setF)} placeholder="e.g. 230" />
             </FormField>
             <FormField label="Right Main (kg)" half>
-              <input type="number" step="0.1" value={form.right_wheel_weight} onChange={e => setF({ right_wheel_weight: e.target.value })} placeholder="e.g. 230" />
+              <input type="number" step="0.1" value={form.right_wheel_weight} onChange={e => handleWheel('right_wheel_weight', e.target.value, form, setF)} placeholder="e.g. 230" />
             </FormField>
           </div>
           {cg && <CGTable cg={cg} />}
         </>
       ) : (
         <>
-          <InfoRow label="Empty Weight" value={aircraft.empty_weight_kg != null ? `${aircraft.empty_weight_kg} kg` : null} />
+          <InfoRow label="Empty Weight (total)" value={
+            (aircraft.nose_wheel_weight != null && aircraft.left_wheel_weight != null && aircraft.right_wheel_weight != null)
+              ? `${(parseFloat(aircraft.nose_wheel_weight) + parseFloat(aircraft.left_wheel_weight) + parseFloat(aircraft.right_wheel_weight)).toFixed(1)} kg`
+              : (aircraft.empty_weight_kg != null ? `${aircraft.empty_weight_kg} kg` : null)
+          } />
           <InfoRow label="Nose Wheel" value={aircraft.nose_wheel_weight != null ? `${aircraft.nose_wheel_weight} kg` : null} />
           <InfoRow label="Left Main" value={aircraft.left_wheel_weight != null ? `${aircraft.left_wheel_weight} kg` : null} />
           <InfoRow label="Right Main" value={aircraft.right_wheel_weight != null ? `${aircraft.right_wheel_weight} kg` : null} />
@@ -671,6 +684,9 @@ export default function FleetDetail() {
   const [serviceTemplates, setServiceTemplates] = useState([]);
   const [serviceRecords,   setServiceRecords]   = useState([]);
 
+  // Event types (dynamic, from DB)
+  const [eventTypes, setEventTypes] = useState([]);
+
   // Contact modal
   const [cModal, setCModal] = useState(null);
 
@@ -694,13 +710,15 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes, tmplRes] = await Promise.all([
+      const [res, optsRes, tmplRes, etRes] = await Promise.all([
         getFleetAircraft(id),
         getFleetConfigOptions(),
         getFleetServiceTemplates(),
+        getFleetEventTypes(),
       ]);
       setConfigOptions(optsRes.data || []);
       setServiceTemplates((tmplRes.data || []).filter(t => t.active));
+      setEventTypes(etRes.data || []);
       applyData(res.data);
     } finally {
       setLoading(false);
@@ -1276,9 +1294,11 @@ export default function FleetDetail() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <span className={`badge ${EVENT_TYPE_BADGE[ev.event_type] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
-                            {EVENT_TYPE_LABEL[ev.event_type] || ev.event_type}
+                          {(() => { const evType = eventTypes.find(t => t.label === ev.event_type); return (
+                          <span className={`badge ${evType?.color || EVENT_TYPE_BADGE[ev.event_type] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
+                            {ev.event_type}
                           </span>
+                          ); })()}
                           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(ev.event_date)}</span>
                           {ev.hours_at_event != null && (
                             <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{ev.hours_at_event}h TSN</span>
@@ -1317,7 +1337,10 @@ export default function FleetDetail() {
               </FormField>
               <FormField label="Type">
                 <select value={newEvent.event_type} onChange={e => setNewEvent(n => ({ ...n, event_type: e.target.value }))}>
-                  {EVENT_TYPES.map(t => <option key={t} value={t}>{EVENT_TYPE_LABEL[t]}</option>)}
+                  {eventTypes.length > 0
+                    ? eventTypes.map(t => <option key={t.id} value={t.label}>{t.label}</option>)
+                    : EVENT_TYPES.map(t => <option key={t} value={t}>{EVENT_TYPE_LABEL[t]}</option>)
+                  }
                 </select>
               </FormField>
               <FormField label="Title *">

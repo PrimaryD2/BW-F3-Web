@@ -248,6 +248,14 @@ CREATE TABLE IF NOT EXISTS fleet_service_records (
   FOREIGN KEY (template_id) REFERENCES fleet_service_templates(id) ON DELETE CASCADE,
   FOREIGN KEY (logged_by)   REFERENCES users(id)           ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS fleet_event_types (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  label VARCHAR(100) NOT NULL,
+  color VARCHAR(20) NOT NULL DEFAULT 'badge-ghost',
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.
@@ -272,6 +280,8 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS nose_wheel_weight DECIMAL(8,2) NULL`,
   `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS left_wheel_weight  DECIMAL(8,2) NULL`,
   `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS right_wheel_weight DECIMAL(8,2) NULL`,
+  // Fleet event type column widening
+  `ALTER TABLE fleet_events MODIFY COLUMN event_type VARCHAR(100) NOT NULL DEFAULT 'other'`,
 ];
 
 async function migrate() {

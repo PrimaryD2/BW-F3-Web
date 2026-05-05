@@ -3,7 +3,8 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const NAV_ITEMS = [
-  { to: '/fleet', label: 'F5 Service', icon: '🔧' },
+  { to: '/fleet',   label: 'Aircrafts', icon: '✈' },
+  { to: '/gallery', label: 'Gallery',   icon: '🖼️' },
 ];
 
 const ROLE_COLORS = { admin: 'var(--danger)', supervisor: 'var(--warning)', worker: 'var(--success)' };
@@ -35,7 +36,7 @@ export default function Layout() {
       {/* Logo */}
       <div style={{ padding: '20px 4px 16px', borderBottom: '1px solid var(--border)', marginBottom: '12px' }}>
         <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--accent)', letterSpacing: '-0.3px' }}>✈ Blackwing</div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Aftermarket Management</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Aircraft Management</div>
       </div>
 
       {/* Main nav */}

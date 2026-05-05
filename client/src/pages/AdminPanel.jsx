@@ -5,6 +5,7 @@ import {
   getAuditLog,
   getFleetConfigOptions, createFleetConfigOption, updateFleetConfigOption, deleteFleetConfigOption,
   getFleetServiceTemplates, createFleetServiceTemplate, updateFleetServiceTemplate, deleteFleetServiceTemplate,
+  getFleetEventTypes, createFleetEventType, updateFleetEventType, deleteFleetEventType,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
@@ -923,6 +924,156 @@ function FleetConfigTab() {
         </div>
       )}
 
+      {/* ── Event Types ──────────────────────────────────────────────────────── */}
+      <EventTypesSection />
+    </div>
+  );
+}
+
+// ─── Event Types Section ──────────────────────────────────────────────────────
+
+const COLOR_OPTIONS = [
+  { value: 'badge-ghost',   label: 'Grey' },
+  { value: 'badge-info',    label: 'Blue' },
+  { value: 'badge-success', label: 'Green' },
+  { value: 'badge-warning', label: 'Yellow' },
+  { value: 'badge-danger',  label: 'Red' },
+];
+
+const EMPTY_ET = { label: '', color: 'badge-ghost', sort_order: 0 };
+
+function EventTypesSection() {
+  const toast = useToast();
+  const [types, setTypes]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [addForm, setAddForm] = useState(EMPTY_ET);
+  const [editId, setEditId]   = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving]   = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try { const r = await getFleetEventTypes(); setTypes(r.data); }
+    finally { setLoading(false); }
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (!addForm.label.trim()) { toast.error('Label is required'); return; }
+    setSaving(true);
+    try {
+      const r = await createFleetEventType(addForm);
+      setTypes(t => [...t, r.data]);
+      setAddForm(EMPTY_ET);
+      toast.success('Event type added');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleUpdate(tid) {
+    setSaving(true);
+    try {
+      const r = await updateFleetEventType(tid, editForm);
+      setTypes(t => t.map(x => x.id === tid ? r.data : x));
+      setEditId(null);
+      toast.success('Updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(tid) {
+    if (!window.confirm('Delete this event type?')) return;
+    try {
+      await deleteFleetEventType(tid);
+      setTypes(t => t.filter(x => x.id !== tid));
+      toast.success('Deleted');
+    } catch { toast.error('Delete failed'); }
+  }
+
+  return (
+    <div style={{ marginTop: 32 }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Event Types</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        Define the types that appear in the event type dropdown on each aircraft's Events tab.
+      </p>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 12 }}>Add Event Type</div>
+        <form onSubmit={handleAdd}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '1 1 200px' }}>
+              <label>Label *</label>
+              <input value={addForm.label} onChange={e => setAddForm(f => ({ ...f, label: e.target.value }))} placeholder="e.g. Annual Inspection" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 130px' }}>
+              <label>Color</label>
+              <select value={addForm.color} onChange={e => setAddForm(f => ({ ...f, color: e.target.value }))}>
+                {COLOR_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: '0 0 80px' }}>
+              <label>Order</label>
+              <input type="number" value={addForm.sort_order} onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))} />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto' }}>
+              <label>&nbsp;</label>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '…' : '+ Add'}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : types.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>No event types yet. Add some above.</div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Label</th><th style={{ width: 100 }}>Color</th><th style={{ width: 70 }}>Order</th><th style={{ width: 100 }}></th></tr>
+              </thead>
+              <tbody>
+                {types.map(t => (
+                  <tr key={t.id}>
+                    <td>
+                      {editId === t.id
+                        ? <input autoFocus value={editForm.label} onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))} style={{ fontSize: 13 }} />
+                        : <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span className={`badge ${t.color}`} style={{ fontSize: 10 }}>{t.label}</span>
+                          </span>}
+                    </td>
+                    <td>
+                      {editId === t.id
+                        ? <select value={editForm.color} onChange={e => setEditForm(f => ({ ...f, color: e.target.value }))} style={{ fontSize: 12 }}>
+                            {COLOR_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                          </select>
+                        : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{COLOR_OPTIONS.find(c => c.value === t.color)?.label || t.color}</span>}
+                    </td>
+                    <td>
+                      {editId === t.id
+                        ? <input type="number" value={editForm.sort_order} onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))} style={{ fontSize: 13, width: 60 }} />
+                        : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.sort_order}</span>}
+                    </td>
+                    <td>
+                      {editId === t.id
+                        ? <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleUpdate(t.id)} disabled={saving}>✓</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
+                          </div>
+                        : <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(t.id); setEditForm({ label: t.label, color: t.color, sort_order: t.sort_order }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(t.id)}>✕</button>
+                          </div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -119,7 +119,7 @@ export default function FleetList() {
     <div className="page">
       <div className="page-header">
         <div>
-          <div className="page-title">F5 Service</div>
+          <div className="page-title">Aircrafts</div>
           <div className="page-subtitle">{aircraft.length} aircraft in fleet registry</div>
         </div>
         {isSupervisor && (

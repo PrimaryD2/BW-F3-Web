@@ -110,6 +110,12 @@ export const deleteFleetSerial = (id, sid)      => api.delete(`/fleet/${id}/seri
 export const addFleetEvent     = (id, d)        => api.post(`/fleet/${id}/events`, d);
 export const deleteFleetEvent  = (id, eid)      => api.delete(`/fleet/${id}/events/${eid}`);
 
+export const getFleetEventTypes    = ()        => api.get('/fleet/event-types');
+export const createFleetEventType  = (d)       => api.post('/fleet/event-types', d);
+export const updateFleetEventType  = (id, d)   => api.put(`/fleet/event-types/${id}`, d);
+export const deleteFleetEventType  = (id)      => api.delete(`/fleet/event-types/${id}`);
+export const getFleetGallery       = ()        => api.get('/fleet/gallery');
+
 export const uploadFleetImage   = (id, formData) =>
   api.post(`/fleet/${id}/images`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const updateFleetImageCaption = (id, iid, caption) =>

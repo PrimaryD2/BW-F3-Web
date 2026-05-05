@@ -42,7 +42,7 @@ export default function Login() {
         <div style={{ textAlign: 'center', marginBottom: '36px' }}>
           <div style={{ fontSize: '48px', marginBottom: '8px' }}>✈</div>
           <div style={{ fontSize: '26px', fontWeight: '800', color: 'var(--accent)' }}>Blackwing</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>Aftermarket Management System</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px' }}>Aircraft Management System</div>
         </div>
 
         <div className="card" style={{ borderRadius: '14px', padding: '32px' }}>

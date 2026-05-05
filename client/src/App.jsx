@@ -15,6 +15,7 @@ import Statistics from './pages/Statistics';
 import AdminPanel from './pages/AdminPanel';
 import FleetList from './pages/FleetList';
 import FleetDetail from './pages/FleetDetail';
+import AircraftGallery from './pages/AircraftGallery';
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -44,6 +45,7 @@ function AppRoutes() {
         <Route path="statistics" element={<Statistics />} />
         <Route path="fleet" element={<FleetList />} />
         <Route path="fleet/:id" element={<FleetDetail />} />
+        <Route path="gallery" element={<AircraftGallery />} />
         <Route path="admin" element={
           <ProtectedRoute roles={['admin']}>
             <AdminPanel />

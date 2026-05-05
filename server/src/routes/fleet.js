@@ -221,6 +221,74 @@ router.get('/upcoming-services', async (_req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// ─── Event Types ─────────────────────────────────────────────────────────────
+
+// GET /api/fleet/event-types
+router.get('/event-types', async (_req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_event_types ORDER BY sort_order, label');
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/fleet/event-types
+router.post('/event-types', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { label, color = 'badge-ghost', sort_order = 0 } = req.body;
+  if (!label) return res.status(400).json({ error: 'label is required' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_event_types (label, color, sort_order) VALUES (?,?,?)',
+      [label.trim(), color, sort_order]
+    );
+    const rows = await query('SELECT * FROM fleet_event_types WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// PUT /api/fleet/event-types/:etid
+router.put('/event-types/:etid', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { label, color, sort_order } = req.body;
+  try {
+    await query(
+      'UPDATE fleet_event_types SET label=?, color=?, sort_order=? WHERE id=?',
+      [label?.trim(), color || 'badge-ghost', sort_order ?? 0, req.params.etid]
+    );
+    const rows = await query('SELECT * FROM fleet_event_types WHERE id = ?', [req.params.etid]);
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// DELETE /api/fleet/event-types/:etid
+router.delete('/event-types/:etid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_event_types WHERE id=?', [req.params.etid]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── Gallery (cover images for all aircraft) ──────────────────────────────────
+
+// GET /api/fleet/gallery
+router.get('/gallery', async (_req, res) => {
+  try {
+    const rows = await query(`
+      SELECT
+        fa.id, fa.bw_serial, fa.aircraft_number, fa.model,
+        fa.registration, fa.country_code, fa.country_name, fa.build_status,
+        (SELECT fi.filename FROM fleet_images fi
+         WHERE fi.aircraft_id = fa.id
+         ORDER BY fi.sort_order ASC, fi.id ASC LIMIT 1) AS cover_image
+      FROM fleet_aircraft fa
+      ORDER BY
+        CASE WHEN fa.aircraft_number REGEXP '^[0-9]+$'
+             THEN CAST(fa.aircraft_number AS UNSIGNED)
+             ELSE 999999 END ASC,
+        fa.bw_serial ASC
+    `);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // ─── Config Options (registered before /:id to avoid param capture) ───────────
 
 // GET /api/fleet/config-options
