@@ -5,6 +5,11 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authenticateToken, requireRole('admin'));
+const VALID_ROLES = ['admin', 'supervisor', 'worker'];
+
+function normalizeRole(role) {
+  return String(role || '').trim().toLowerCase();
+}
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
@@ -23,17 +28,18 @@ router.get('/users', async (req, res) => {
 // POST /api/admin/users
 router.post('/users', async (req, res) => {
   const { name, username, password, role = 'worker' } = req.body;
+  const normalizedRole = normalizeRole(role);
   if (!name || !username || !password) {
     return res.status(400).json({ error: 'name, username, and password required' });
   }
-  if (!['admin', 'supervisor', 'worker'].includes(role)) {
+  if (!VALID_ROLES.includes(normalizedRole)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
   try {
     const hash = await bcrypt.hash(password, 12);
     const result = await query(
       'INSERT INTO users (name, username, password_hash, role, force_password_change) VALUES (?,?,?,?,TRUE)',
-      [name, username, hash, role]
+      [name, username, hash, normalizedRole]
     );
     const user = await query(
       'SELECT id, name, username, role, active, force_password_change, created_at FROM users WHERE id = ?',
@@ -55,8 +61,9 @@ router.put('/users/:id', async (req, res) => {
     const params = [];
     if (name !== undefined) { fields.push('name = ?'); params.push(name); }
     if (role !== undefined) {
-      if (!['admin', 'supervisor', 'worker'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-      fields.push('role = ?'); params.push(role);
+      const normalizedRole = normalizeRole(role);
+      if (!VALID_ROLES.includes(normalizedRole)) return res.status(400).json({ error: 'Invalid role' });
+      fields.push('role = ?'); params.push(normalizedRole);
     }
     if (active !== undefined) { fields.push('active = ?'); params.push(active ? 1 : 0); }
     if (password) {
@@ -267,6 +274,376 @@ router.get('/audit', async (req, res) => {
     const combined = [...signoffs, ...ncrActions].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     const filtered = type ? combined.filter(e => e.type === type) : combined;
     res.json(filtered.slice(0, 500));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/roles
+router.get('/roles', async (_req, res) => {
+  res.json(ROLES);
+});
+
+// GET /api/admin/permissions
+router.get('/permissions', async (_req, res) => {
+  try {
+    const rows = await query(
+      'SELECT role, permission_key, allowed FROM role_permissions ORDER BY role, permission_key'
+    );
+    const byRole = Object.fromEntries(ROLES.map((role) => [role, {}]));
+    for (const role of ROLES) {
+      const defaults = new Set(DEFAULT_ROLE_PERMISSIONS[role] || []);
+      for (const definition of PERMISSION_DEFINITIONS) {
+        byRole[role][definition.key] = defaults.has(definition.key);
+      }
+    }
+    for (const row of rows) {
+      if (!byRole[row.role]) byRole[row.role] = {};
+      byRole[row.role][row.permission_key] = !!row.allowed;
+    }
+    res.json({ roles: ROLES, definitions: PERMISSION_DEFINITIONS, permissions: byRole });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/permissions/:role
+router.put('/permissions/:role', async (req, res) => {
+  const role = normalizeRole(req.params.role);
+  const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions : null;
+  if (!ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  if (!permissions) return res.status(400).json({ error: 'permissions array required' });
+  try {
+    await query('DELETE FROM role_permissions WHERE role = ?', [role]);
+    for (const key of permissions) {
+      await query(
+        'INSERT INTO role_permissions (role, permission_key, allowed) VALUES (?, ?, TRUE)',
+        [role, key]
+      );
+    }
+    res.json({ ok: true, role, permissions });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/models
+router.get('/models', async (_req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_models ORDER BY active DESC, sort_order ASC, name ASC');
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/models
+router.post('/models', async (req, res) => {
+  const { name, code, active = true, sort_order = 0 } = req.body || {};
+  if (!String(name || '').trim()) return res.status(400).json({ error: 'Model name required' });
+  try {
+    const result = await query(
+      'INSERT INTO fleet_models (name, code, active, sort_order) VALUES (?, ?, ?, ?)',
+      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0]
+    );
+    const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [result.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Model already exists' });
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/models/:id
+router.put('/models/:id', async (req, res) => {
+  const { name, code, active, sort_order } = req.body || {};
+  try {
+    await query(
+      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ? WHERE id = ?',
+      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, req.params.id]
+    );
+    const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/models/:id
+router.delete('/models/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_models WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Service Bulletins ──────────────────────────────────────────────────────
+//
+// New model: a bulletin targets one or more **config options** (e.g. "Rotax 912 ULS",
+// "Garmin G3X Touch") rather than a serial-number prefix. Any aircraft that has one
+// of those options selected in its configuration becomes "affected" automatically.
+//
+// Fields on the bulletin:
+//   title       — short title
+//   reason      — why this bulletin exists
+//   category    — mandatory | obligatory | recommended | optional
+//   what_to_do  — instructions
+//
+// The legacy serial_prefix / component_type / component_name / details fields are
+// still in the table for backward-compat with existing rows but are no longer used
+// by new bulletins.
+
+// Helper: recompute the affected-aircraft list from the bulletin's config-option
+// links. Existing fleet_bulletin_aircraft rows are preserved when re-running
+// (so resolved sign-offs aren't wiped), only INSERT IGNORE is used.
+async function recomputeAffectedAircraft(bulletinId) {
+  // Find every aircraft that has any of this bulletin's affected config options
+  const matches = await query(
+    `SELECT DISTINCT fac.aircraft_id
+       FROM fleet_bulletin_config_options bco
+       JOIN fleet_aircraft_config fac ON fac.option_id = bco.option_id
+      WHERE bco.bulletin_id = ?`,
+    [bulletinId]
+  );
+  for (const m of matches) {
+    await query(
+      `INSERT IGNORE INTO fleet_bulletin_aircraft (bulletin_id, aircraft_id, serial_id)
+       VALUES (?, ?, NULL)`,
+      [bulletinId, m.aircraft_id]
+    );
+  }
+  return matches.length;
+}
+
+// GET /api/admin/bulletins
+router.get('/bulletins', async (_req, res) => {
+  try {
+    const rows = await query(
+      `SELECT fb.*,
+              u.name AS created_by_name,
+              (
+                SELECT COUNT(*) FROM fleet_bulletin_aircraft fba
+                WHERE fba.bulletin_id = fb.id AND fba.status = 'open'
+              ) AS open_aircraft_count,
+              (
+                SELECT COUNT(*) FROM fleet_bulletin_aircraft fba
+                WHERE fba.bulletin_id = fb.id
+              ) AS total_aircraft_count
+       FROM fleet_bulletins fb
+       LEFT JOIN users u ON u.id = fb.created_by
+       ORDER BY CASE WHEN fb.status = 'open' THEN 0 ELSE 1 END, fb.created_at DESC`
+    );
+    // Join affected config options for each bulletin (single query, grouped client-side)
+    const optionRows = await query(
+      `SELECT bco.bulletin_id, fco.id, fco.label, fco.category
+         FROM fleet_bulletin_config_options bco
+         JOIN fleet_config_options fco ON fco.id = bco.option_id`
+    );
+    const optsByBulletin = {};
+    for (const r of optionRows) {
+      if (!optsByBulletin[r.bulletin_id]) optsByBulletin[r.bulletin_id] = [];
+      optsByBulletin[r.bulletin_id].push({ id: r.id, label: r.label, category: r.category });
+    }
+    res.json(rows.map(b => ({ ...b, affected_options: optsByBulletin[b.id] || [] })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/bulletins/:id — single bulletin (for edit form)
+router.get('/bulletins/:id', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_bulletins WHERE id = ?', [req.params.id]);
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const options = await query(
+      `SELECT fco.id, fco.label, fco.category
+         FROM fleet_bulletin_config_options bco
+         JOIN fleet_config_options fco ON fco.id = bco.option_id
+        WHERE bco.bulletin_id = ?`,
+      [req.params.id]
+    );
+    res.json({
+      ...rows[0],
+      affected_options: options,
+      affected_option_ids: options.map(o => o.id),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/bulletins
+router.post('/bulletins', async (req, res) => {
+  const {
+    title,
+    reason,
+    category = 'optional',
+    what_to_do,
+    affected_option_ids = [],
+  } = req.body || {};
+  if (!String(title || '').trim()) {
+    return res.status(400).json({ error: 'title is required' });
+  }
+  if (!['mandatory', 'obligatory', 'recommended', 'optional'].includes(category)) {
+    return res.status(400).json({ error: 'invalid category' });
+  }
+  try {
+    const result = await query(
+      `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        String(title).trim(),
+        category,
+        reason || null,
+        what_to_do || null,
+        req.user.id,
+      ]
+    );
+    const bulletinId = result.insertId;
+    // Link config options + compute affected aircraft
+    for (const oid of affected_option_ids) {
+      if (oid == null) continue;
+      await query(
+        `INSERT IGNORE INTO fleet_bulletin_config_options (bulletin_id, option_id) VALUES (?, ?)`,
+        [bulletinId, Number(oid)]
+      );
+    }
+    const matchedCount = await recomputeAffectedAircraft(bulletinId);
+    const rows = await query('SELECT * FROM fleet_bulletins WHERE id = ?', [bulletinId]);
+    res.status(201).json({ ...rows[0], matched_aircraft_count: matchedCount });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/admin/bulletins/:id
+router.put('/bulletins/:id', async (req, res) => {
+  const {
+    title,
+    reason,
+    category,
+    what_to_do,
+    status,
+    affected_option_ids,
+  } = req.body || {};
+  try {
+    // Build dynamic update — only touch what was sent so simple status flips work.
+    const fields = [];
+    const params = [];
+    if (title !== undefined) { fields.push('title = ?'); params.push(String(title).trim()); }
+    if (category !== undefined) {
+      if (!['mandatory', 'obligatory', 'recommended', 'optional'].includes(category)) {
+        return res.status(400).json({ error: 'invalid category' });
+      }
+      fields.push('category = ?'); params.push(category);
+    }
+    if (reason !== undefined)     { fields.push('reason = ?');     params.push(reason || null); }
+    if (what_to_do !== undefined) { fields.push('what_to_do = ?'); params.push(what_to_do || null); }
+    if (status !== undefined)     { fields.push('status = ?');     params.push(status === 'closed' ? 'closed' : 'open'); }
+
+    if (fields.length > 0) {
+      params.push(req.params.id);
+      await query(`UPDATE fleet_bulletins SET ${fields.join(', ')} WHERE id = ?`, params);
+    }
+
+    // If affected options were passed, replace them (and re-link aircraft).
+    if (Array.isArray(affected_option_ids)) {
+      await query('DELETE FROM fleet_bulletin_config_options WHERE bulletin_id = ?', [req.params.id]);
+      for (const oid of affected_option_ids) {
+        if (oid == null) continue;
+        await query(
+          `INSERT IGNORE INTO fleet_bulletin_config_options (bulletin_id, option_id) VALUES (?, ?)`,
+          [req.params.id, Number(oid)]
+        );
+      }
+      await recomputeAffectedAircraft(req.params.id);
+    }
+
+    const rows = await query('SELECT * FROM fleet_bulletins WHERE id = ?', [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/admin/bulletins/:id
+router.delete('/bulletins/:id', async (req, res) => {
+  try {
+    // Aircraft + config-option links cascade via FK ON DELETE CASCADE
+    await query('DELETE FROM fleet_bulletins WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/admin/bulletins/:id/aircraft
+router.get('/bulletins/:id/aircraft', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT fba.*, fa.bw_serial, fa.registration, fa.model,
+              fsn.component, fsn.component_type, fsn.component_name, fsn.serial_number
+       FROM fleet_bulletin_aircraft fba
+       JOIN fleet_aircraft fa ON fa.id = fba.aircraft_id
+       LEFT JOIN fleet_serial_numbers fsn ON fsn.id = fba.serial_id
+       WHERE fba.bulletin_id = ?
+       ORDER BY CASE WHEN fba.status = 'open' THEN 0 ELSE 1 END, fa.bw_serial ASC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/admin/bulletins/:id/aircraft/:aircraftId/resolve
+router.post('/bulletins/:id/aircraft/:aircraftId/resolve', async (req, res) => {
+  const { resolution_notes, resolved_extra_work, labor_hours, signed_off_by } = req.body || {};
+  try {
+    await query(
+      `UPDATE fleet_bulletin_aircraft
+       SET status = 'resolved',
+           resolution_notes = ?,
+           resolved_extra_work = ?,
+           labor_hours = ?,
+           signed_off_by = ?,
+           resolved_at = NOW()
+       WHERE bulletin_id = ? AND aircraft_id = ?`,
+      [
+        resolution_notes || null,
+        resolved_extra_work || null,
+        labor_hours != null && labor_hours !== '' ? Number(labor_hours) : null,
+        signed_off_by || req.user.name || req.user.username,
+        req.params.id,
+        req.params.aircraftId,
+      ]
+    );
+    const openRows = await query(
+      'SELECT COUNT(*) AS count FROM fleet_bulletin_aircraft WHERE bulletin_id = ? AND status = ?',
+      [req.params.id, 'open']
+    );
+    if (Number(openRows[0]?.count || 0) === 0) {
+      await query(
+        'UPDATE fleet_bulletins SET status = ?, closed_by = ?, closed_at = NOW() WHERE id = ?',
+        ['closed', req.user.id, req.params.id]
+      );
+    }
+    res.json({ ok: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });

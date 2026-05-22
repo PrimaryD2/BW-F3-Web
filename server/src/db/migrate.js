@@ -1,5 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 const { pool } = require('../config/db');
+const { DEFAULT_ROLE_PERMISSIONS, ROLES } = require('../config/permissions');
 
 const SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -173,7 +174,12 @@ CREATE TABLE IF NOT EXISTS fleet_serial_numbers (
   id INT AUTO_INCREMENT PRIMARY KEY,
   aircraft_id INT NOT NULL,
   component VARCHAR(100) NOT NULL,
+  component_type VARCHAR(120) NULL,
+  component_name VARCHAR(180) NULL,
   serial_number VARCHAR(200) NOT NULL,
+  date_installed DATE NULL,
+  expiry_date DATE NULL,
+  repack_date DATE NULL,
   notes VARCHAR(300) NULL,
   sort_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -199,11 +205,31 @@ CREATE TABLE IF NOT EXISTS fleet_images (
   aircraft_id INT NOT NULL,
   filename VARCHAR(300) NOT NULL,
   caption VARCHAR(200) NULL,
+  category VARCHAR(100) NULL,
   sort_order INT NOT NULL DEFAULT 0,
   uploaded_by INT NULL,
   uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  role VARCHAR(50) NOT NULL,
+  permission_key VARCHAR(100) NOT NULL,
+  allowed BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_role_permission (role, permission_key)
+);
+
+CREATE TABLE IF NOT EXISTS fleet_models (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  code VARCHAR(60) NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fleet_model_name (name)
 );
 
 CREATE TABLE IF NOT EXISTS fleet_config_options (
@@ -249,6 +275,28 @@ CREATE TABLE IF NOT EXISTS fleet_service_records (
   FOREIGN KEY (logged_by)   REFERENCES users(id)           ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS fleet_planned_maintenance (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id          INT          NOT NULL,
+  template_id          INT          NOT NULL,
+  planned_date         DATE         NOT NULL,
+  planned_comments     TEXT         NULL,
+  status               ENUM('planned','completed') NOT NULL DEFAULT 'planned',
+  completed_date       DATE         NULL,
+  labor_hours          DECIMAL(8,2) NULL,
+  additional_work      TEXT         NULL,
+  signoff_notes        TEXT         NULL,
+  signed_off_by        VARCHAR(100) NULL,
+  signed_off_at        TIMESTAMP    NULL,
+  planned_by           INT          NULL,
+  completed_record_id  INT          NULL,
+  created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id)         REFERENCES fleet_aircraft(id)         ON DELETE CASCADE,
+  FOREIGN KEY (template_id)         REFERENCES fleet_service_templates(id) ON DELETE CASCADE,
+  FOREIGN KEY (planned_by)          REFERENCES users(id)                  ON DELETE SET NULL,
+  FOREIGN KEY (completed_record_id) REFERENCES fleet_service_records(id)  ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS fleet_event_types (
   id INT AUTO_INCREMENT PRIMARY KEY,
   label VARCHAR(100) NOT NULL,
@@ -271,11 +319,107 @@ CREATE TABLE IF NOT EXISTS fleet_paperwork (
   FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS fleet_bulletins (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  component_type VARCHAR(120) NULL,
+  component_name VARCHAR(180) NULL,
+  serial_prefix VARCHAR(120) NOT NULL,
+  details TEXT NULL,
+  status ENUM('open','closed') NOT NULL DEFAULT 'open',
+  created_by INT NULL,
+  closed_by INT NULL,
+  closed_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (closed_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS fleet_bulletin_aircraft (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  bulletin_id INT NOT NULL,
+  aircraft_id INT NOT NULL,
+  serial_id INT NULL,
+  status ENUM('open','resolved') NOT NULL DEFAULT 'open',
+  resolution_notes TEXT NULL,
+  resolved_extra_work TEXT NULL,
+  labor_hours DECIMAL(8,2) NULL,
+  signed_off_by VARCHAR(120) NULL,
+  resolved_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (bulletin_id) REFERENCES fleet_bulletins(id) ON DELETE CASCADE,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (serial_id) REFERENCES fleet_serial_numbers(id) ON DELETE SET NULL,
+  UNIQUE KEY uq_bulletin_aircraft (bulletin_id, aircraft_id, serial_id)
+);
+
+CREATE TABLE IF NOT EXISTS fleet_part_replacements (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  component_serial_id INT NULL,
+  component_type VARCHAR(120) NULL,
+  component_name VARCHAR(180) NULL,
+  old_part_serial VARCHAR(120) NOT NULL,
+  new_part_serial VARCHAR(120) NOT NULL,
+  reason TEXT NULL,
+  replacement_date DATE NOT NULL,
+  flight_hours DECIMAL(8,2) NULL,
+  technician VARCHAR(120) NULL,
+  notes TEXT NULL,
+  created_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE,
+  FOREIGN KEY (component_serial_id) REFERENCES fleet_serial_numbers(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ─── Paint codes per aircraft (multiple paints per aircraft) ────────────────
+CREATE TABLE IF NOT EXISTS fleet_paints (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  aircraft_id INT NOT NULL,
+  color_name VARCHAR(120) NOT NULL,
+  paint_code VARCHAR(120) NULL,
+  area VARCHAR(120) NULL,
+  notes VARCHAR(300) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE
+);
+
+-- ─── Service Bulletin → affected config options (parts that aircraft has) ───
+CREATE TABLE IF NOT EXISTS fleet_bulletin_config_options (
+  bulletin_id INT NOT NULL,
+  option_id INT NOT NULL,
+  PRIMARY KEY (bulletin_id, option_id),
+  FOREIGN KEY (bulletin_id) REFERENCES fleet_bulletins(id) ON DELETE CASCADE,
+  FOREIGN KEY (option_id)   REFERENCES fleet_config_options(id) ON DELETE CASCADE
+);
+
+-- ─── Planned-maintenance items (multiple per planned-maintenance entry) ─────
+CREATE TABLE IF NOT EXISTS fleet_planned_maintenance_items (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  planned_id INT NOT NULL,
+  template_id INT NULL,
+  title VARCHAR(200) NOT NULL,
+  description TEXT NULL,
+  signed_off BOOLEAN NOT NULL DEFAULT FALSE,
+  signed_off_by VARCHAR(120) NULL,
+  signed_off_at TIMESTAMP NULL,
+  signed_off_record_id INT NULL,
+  notes TEXT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (planned_id) REFERENCES fleet_planned_maintenance(id) ON DELETE CASCADE,
+  FOREIGN KEY (template_id) REFERENCES fleet_service_templates(id) ON DELETE SET NULL,
+  FOREIGN KEY (signed_off_record_id) REFERENCES fleet_service_records(id) ON DELETE SET NULL
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.
 // MariaDB 10.0+ supports ADD COLUMN IF NOT EXISTS.
 const ALTER_STMTS = [
+  `ALTER TABLE users MODIFY COLUMN role VARCHAR(50) NOT NULL DEFAULT 'worker'`,
   // Task template enrichment fields
   `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS op_number VARCHAR(20) NULL`,
   `ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS is_section_header BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -299,6 +443,42 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_events MODIFY COLUMN event_type VARCHAR(100) NOT NULL DEFAULT 'other'`,
   // Cover image flag for aircraft gallery
   `ALTER TABLE fleet_images ADD COLUMN IF NOT EXISTS is_cover BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE fleet_images ADD COLUMN IF NOT EXISTS category VARCHAR(100) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS component_type VARCHAR(120) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS component_name VARCHAR(180) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS date_installed DATE NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS expiry_date DATE NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS repack_date DATE NULL`,
+  // Components — extra fields
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS software_version VARCHAR(120) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS system_id VARCHAR(120) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS password VARCHAR(255) NULL`,
+  // Components — uninstall tracking (replaces fleet_part_replacements concept)
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstalled BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstalled_at DATE NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstall_reason TEXT NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstall_tsn DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstall_technician VARCHAR(120) NULL`,
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS uninstall_notes TEXT NULL`,
+  // Aircraft — "we service this one" flag
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS serviced_by_us BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Service bulletins — new fields (existing schema kept compatible)
+  `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS category ENUM('mandatory','obligatory','recommended','optional') NOT NULL DEFAULT 'optional'`,
+  `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS reason TEXT NULL`,
+  `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS what_to_do TEXT NULL`,
+  `ALTER TABLE fleet_bulletins MODIFY COLUMN serial_prefix VARCHAR(120) NULL`,
+  // Planned maintenance — multi-item support
+  `ALTER TABLE fleet_planned_maintenance MODIFY COLUMN template_id INT NULL`,
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS planned_arrival_date DATE NULL`,
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
+  // Service templates — one-time milestone flag (25h initial, 200h, 600h, etc.)
+  // These fire ONCE at a specific TSN value (±10h tolerance) instead of every
+  // N hours, and supersede the recurring 100h-or-12mo check when active.
+  `ALTER TABLE fleet_service_templates ADD COLUMN IF NOT EXISTS is_one_time BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Auto-flag common one-time inspections so existing data behaves correctly
+  // without requiring the user to flip the flag manually. Only flips false→true,
+  // so it's idempotent and won't unflag templates the user intentionally toggled.
+  `UPDATE fleet_service_templates SET is_one_time = TRUE WHERE interval_hours IN (25, 200, 600) AND is_one_time = FALSE`,
 ];
 
 async function migrate() {

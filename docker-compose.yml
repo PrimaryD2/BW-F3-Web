@@ -19,6 +19,21 @@ services:
       retries: 12
       start_period: 30s
 
+  # ── phpMyAdmin ───────────────────────────────────────────────────────────────
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: f3-phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 512M
+    depends_on:
+      db:
+        condition: service_healthy
+
   # ── Node.js API + served React app ───────────────────────────────────────────
   server:
     build:
@@ -28,6 +43,8 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-3001}:3001"
+    volumes:
+      - ./server/uploads:/app/server/uploads
     depends_on:
       db:
         condition: service_healthy

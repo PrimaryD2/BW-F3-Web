@@ -65,6 +65,21 @@ export const updateNcr       = (id, d) => api.put(`/ncr/${id}`, d);
 export const getUsers        = () => api.get('/admin/users');
 export const createUser      = (d) => api.post('/admin/users', d);
 export const updateUser      = (id, d) => api.put(`/admin/users/${id}`, d);
+export const getRoles        = () => api.get('/admin/roles');
+export const getRolePermissions = () => api.get('/admin/permissions');
+export const updateRolePermissions = (role, permissions) => api.put(`/admin/permissions/${role}`, { permissions });
+export const getFleetModelsAdmin = () => api.get('/admin/models');
+export const createFleetModel = (d) => api.post('/admin/models', d);
+export const updateFleetModel = (id, d) => api.put(`/admin/models/${id}`, d);
+export const deleteFleetModel = (id) => api.delete(`/admin/models/${id}`);
+export const getFleetBulletins        = ()        => api.get('/admin/bulletins');
+export const getFleetBulletin         = (id)      => api.get(`/admin/bulletins/${id}`);
+export const createFleetBulletin      = (d)       => api.post('/admin/bulletins', d);
+export const updateFleetBulletin      = (id, d)   => api.put(`/admin/bulletins/${id}`, d);
+export const deleteFleetBulletin      = (id)      => api.delete(`/admin/bulletins/${id}`);
+export const getFleetBulletinAircraft = (id)      => api.get(`/admin/bulletins/${id}/aircraft`);
+export const resolveFleetBulletinAircraft = (id, aircraftId, d) =>
+  api.post(`/admin/bulletins/${id}/aircraft/${aircraftId}/resolve`, d);
 export const getTaskTemplates = (p) => api.get('/admin/task-templates', { params: p });
 export const getStationTemplates = (stationId) => api.get(`/admin/task-templates/station/${stationId}`);
 export const createTemplate  = (d) => api.post('/admin/task-templates', d);
@@ -81,6 +96,7 @@ export const exportCsv          = (p) => `/api/statistics/export/csv?${new URLSe
 
 // ─── Fleet / F5 Service ───────────────────────────────────────────────────────
 export const getFleetList        = ()        => api.get('/fleet');
+export const getFleetModels      = ()        => api.get('/fleet/models');
 export const createFleetAircraft = (d)       => api.post('/fleet', d);
 export const getFleetAircraft    = (id)      => api.get(`/fleet/${id}`);
 export const updateFleetAircraft = (id, d)   => api.put(`/fleet/${id}`, d);
@@ -98,16 +114,33 @@ export const deleteFleetServiceTemplate = (tid)      => api.delete(`/fleet/servi
 export const completeFleetService       = (id, d)    => api.post(`/fleet/${id}/services`, d);
 export const deleteFleetServiceRecord   = (id, rid)  => api.delete(`/fleet/${id}/services/${rid}`);
 export const getFleetUpcomingServices   = ()         => api.get('/fleet/upcoming-services');
+export const getFleetPlannedMaintenance = ()         => api.get('/fleet/planned-maintenance');
+export const createFleetPlannedMaintenance = (id, d) => api.post(`/fleet/${id}/planned-maintenance`, d);
+export const updateFleetPlannedMaintenance = (pid, d) => api.put(`/fleet/planned-maintenance/${pid}`, d);
+export const deleteFleetPlannedMaintenance = (pid)    => api.delete(`/fleet/planned-maintenance/${pid}`);
+export const signOffFleetPlannedMaintenance = (pid, d) => api.post(`/fleet/planned-maintenance/${pid}/signoff`, d);
 
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
 export const deleteFleetContact = (id, cid)     => api.delete(`/fleet/${id}/contacts/${cid}`);
 
-export const addFleetSerial    = (id, d)        => api.post(`/fleet/${id}/serials`, d);
-export const updateFleetSerial = (id, sid, d)   => api.put(`/fleet/${id}/serials/${sid}`, d);
-export const deleteFleetSerial = (id, sid)      => api.delete(`/fleet/${id}/serials/${sid}`);
+export const addFleetSerial       = (id, d)       => api.post(`/fleet/${id}/serials`, d);
+export const updateFleetSerial    = (id, sid, d)  => api.put(`/fleet/${id}/serials/${sid}`, d);
+export const deleteFleetSerial    = (id, sid)     => api.delete(`/fleet/${id}/serials/${sid}`);
+export const uninstallFleetSerial = (id, sid, d)  => api.put(`/fleet/${id}/serials/${sid}/uninstall`, d);
+
+// Legacy part-replacement endpoints (kept for backward compat; new flow uses uninstall above)
+export const addFleetPartReplacement    = (id, d)      => api.post(`/fleet/${id}/part-replacements`, d);
+export const updateFleetPartReplacement = (id, rid, d) => api.put(`/fleet/${id}/part-replacements/${rid}`, d);
+export const deleteFleetPartReplacement = (id, rid)    => api.delete(`/fleet/${id}/part-replacements/${rid}`);
+
+// Paint codes (multiple per aircraft)
+export const addFleetPaint    = (id, d)       => api.post(`/fleet/${id}/paints`, d);
+export const updateFleetPaint = (id, pid, d)  => api.put(`/fleet/${id}/paints/${pid}`, d);
+export const deleteFleetPaint = (id, pid)     => api.delete(`/fleet/${id}/paints/${pid}`);
 
 export const addFleetEvent     = (id, d)        => api.post(`/fleet/${id}/events`, d);
+export const updateFleetEvent  = (id, eid, d)   => api.put(`/fleet/${id}/events/${eid}`, d);
 export const deleteFleetEvent  = (id, eid)      => api.delete(`/fleet/${id}/events/${eid}`);
 
 export const getFleetEventTypes    = ()        => api.get('/fleet/event-types');
@@ -118,8 +151,8 @@ export const getFleetGallery       = ()        => api.get('/fleet/gallery');
 
 export const uploadFleetImage   = (id, formData) =>
   api.post(`/fleet/${id}/images`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-export const updateFleetImageCaption = (id, iid, caption) =>
-  api.put(`/fleet/${id}/images/${iid}/caption`, { caption });
+export const updateFleetImageCaption = (id, iid, payload) =>
+  api.put(`/fleet/${id}/images/${iid}/caption`, typeof payload === 'string' ? { caption: payload } : payload);
 export const setFleetImageCover  = (id, iid)    => api.put(`/fleet/${id}/images/${iid}/cover`);
 export const deleteFleetImage    = (id, iid)    => api.delete(`/fleet/${id}/images/${iid}`);
 

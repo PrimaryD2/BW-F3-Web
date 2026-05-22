@@ -3,11 +3,16 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const NAV_ITEMS = [
-  { to: '/fleet',   label: 'Aircrafts', icon: '✈' },
-  { to: '/gallery', label: 'Gallery',   icon: '🖼️' },
+  { to: '/fleet', label: 'Aircrafts', icon: 'A' },
+  { to: '/gallery', label: 'Gallery', icon: 'G' },
+  { to: '/planned-maintenance', label: 'Planned Maintenance', icon: 'P' },
 ];
 
-const ROLE_COLORS = { admin: 'var(--danger)', supervisor: 'var(--warning)', worker: 'var(--success)' };
+const ROLE_COLORS = {
+  admin: 'var(--danger)',
+  supervisor: 'var(--warning)',
+  worker: 'var(--success)',
+};
 
 export default function Layout() {
   const { user, logout, isAdmin } = useAuth();
@@ -33,13 +38,11 @@ export default function Layout() {
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
       padding: '0 12px 20px', height: '100vh', position: 'sticky', top: 0, flexShrink: 0,
     }}>
-      {/* Logo */}
       <div style={{ padding: '20px 4px 16px', borderBottom: '1px solid var(--border)', marginBottom: '12px' }}>
-        <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--accent)', letterSpacing: '-0.3px' }}>✈ Blackwing</div>
+        <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--accent)', letterSpacing: '-0.3px' }}>Blackwing</div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Aircraft Management</div>
       </div>
 
-      {/* Main nav */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: 'auto' }}>
         {NAV_ITEMS.map(item => (
           <NavLink key={item.to} to={item.to} end={item.exact} style={navLinkStyle}>
@@ -48,12 +51,11 @@ export default function Layout() {
         ))}
         {isAdmin && (
           <NavLink to="/admin" style={navLinkStyle}>
-            <span>⚙</span> Admin
+            <span>S</span> Admin
           </NavLink>
         )}
       </div>
 
-      {/* User info */}
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginTop: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
           <div style={{
@@ -77,7 +79,7 @@ export default function Layout() {
           className="btn btn-ghost btn-sm"
           style={{ width: '100%', justifyContent: 'flex-start' }}
         >
-          ⎋ Sign Out
+          Sign Out
         </button>
       </div>
     </nav>
@@ -85,12 +87,10 @@ export default function Layout() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-primary)' }}>
-      {/* Desktop sidebar */}
       <div style={{ display: 'flex' }} className="desktop-sidebar">
         {sidebar}
       </div>
 
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 199 }}
@@ -98,7 +98,6 @@ export default function Layout() {
         />
       )}
 
-      {/* Mobile sidebar */}
       <div style={{
         position: 'fixed', left: sidebarOpen ? 0 : '-240px', top: 0, bottom: 0,
         width: '220px', zIndex: 200, transition: 'left 0.25s ease',
@@ -106,9 +105,7 @@ export default function Layout() {
         {sidebar}
       </div>
 
-      {/* Main content */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {/* Mobile header */}
         <div style={{
           display: 'none', alignItems: 'center', gap: '12px',
           padding: '12px 16px', background: 'var(--bg-secondary)',
@@ -117,8 +114,8 @@ export default function Layout() {
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             style={{ background: 'none', border: 'none', color: 'var(--text-primary)', fontSize: '20px', cursor: 'pointer' }}
-          >☰</button>
-          <span style={{ fontWeight: '700', color: 'var(--accent)' }}>✈ Blackwing</span>
+          >Menu</button>
+          <span style={{ fontWeight: '700', color: 'var(--accent)' }}>Blackwing</span>
         </div>
 
         <main style={{ flex: 1 }}>

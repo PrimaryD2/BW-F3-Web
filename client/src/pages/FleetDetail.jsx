@@ -3,13 +3,17 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   getFleetAircraft, updateFleetAircraft,
   addFleetContact, updateFleetContact, deleteFleetContact,
-  addFleetSerial, deleteFleetSerial,
-  addFleetEvent, deleteFleetEvent,
+  addFleetSerial, updateFleetSerial, deleteFleetSerial, uninstallFleetSerial,
+  addFleetPaint, updateFleetPaint, deleteFleetPaint,
+  addFleetPartReplacement, updateFleetPartReplacement, deleteFleetPartReplacement,
+  addFleetEvent, updateFleetEvent, deleteFleetEvent,
   uploadFleetImage, updateFleetImageCaption, setFleetImageCover, deleteFleetImage,
   getFleetConfigOptions, saveFleetConfig,
-  getFleetServiceTemplates, completeFleetService, deleteFleetServiceRecord,
+  getFleetServiceTemplates, completeFleetService,
+  createFleetPlannedMaintenance, updateFleetPlannedMaintenance, deleteFleetServiceRecord, getFleetModels,
   getFleetEventTypes,
   uploadFleetPaperwork, updateFleetPaperwork, deleteFleetPaperwork, paperworkDownloadUrl,
+  getUsers,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -54,7 +58,7 @@ const BUILD_STATUS_LABEL = {
   for_sale:      'For Sale',
   written_off:   'Written Off',
 };
-const MODELS = ['BW600', 'BW635RG', 'BW650', 'Other'];
+const MODEL_FALLBACKS = ['BW600', 'BW635RG', 'BW650', 'Other'];
 const EVENT_TYPES = ['service', 'upgrade', 'inspection', 'incident', 'repaint', 'avionics_update', 'ownership_change', 'other'];
 const EVENT_TYPE_LABEL = {
   service: 'Service', upgrade: 'Upgrade', inspection: 'Inspection',
@@ -70,6 +74,8 @@ const DEFAULT_COMPONENTS = ['Engine', 'Propeller', 'Governor', 'ECU', 'Fusebox']
 const EMPTY_CONTACT = { name: '', role: '', email: '', phone: '' };
 const EMPTY_EVENT   = { event_date: '', event_type: 'service', title: '', description: '', hours_at_event: '' };
 const EMPTY_COMPLETION = { completed_date: '', hours_at_completion: '', signed_by: '', notes: '' };
+const EMPTY_PLANNED_MAINTENANCE = { planned_arrival_date: '', assigned_technician_id: '', planned_comments: '', items: [] };
+const EMPTY_PM_ITEM = { template_id: '', title: '', description: '' };
 
 // ─── CSS Flag icon — works cross-platform (no emoji needed) ──────────────────
 
@@ -308,12 +314,17 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
 
 function MaintenanceTab({
   aircraft, serviceTemplates, serviceRecords, setServiceRecords,
-  form, canEdit, setF, isSupervisor, toast,
+  plannedMaintenance, setPlannedMaintenance,
+  form, canEdit, setF, isSupervisor, toast, users,
 }) {
-  // Which template has the completion form open: templateId | null
   const [openForm, setOpenForm] = useState(null);
   const [compForm, setCompForm] = useState(EMPTY_COMPLETION);
   const [compSaving, setCompSaving] = useState(false);
+  const [plannedForm, setPlannedForm] = useState({
+    ...EMPTY_PLANNED_MAINTENANCE,
+    planned_arrival_date: new Date().toISOString().slice(0, 10),
+  });
+  const [plannedSaving, setPlannedSaving] = useState(false);
 
   // Build a quick lookup: template_id → latest record
   const latestByTemplate = serviceRecords.reduce((acc, rec) => {
@@ -336,6 +347,9 @@ function MaintenanceTab({
     acc[t.category].push(t);
     return acc;
   }, {});
+
+  const openPlannedItems = plannedMaintenance.filter(item => item.status === 'planned');
+  const completedPlannedItems = plannedMaintenance.filter(item => item.status === 'completed');
 
   function calcNextDue(template, latest, tsnHours) {
     let byDate = null, byHours = null;
@@ -409,6 +423,161 @@ function MaintenanceTab({
     return <span className="badge badge-success" style={{ fontSize: 10 }}>OK</span>;
   }
 
+  function extractIntervalHoursFixed(template) {
+    if (template.interval_hours != null) return Number(template.interval_hours);
+    const match = String(template.title || '').match(/(\d+)\s*h/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  function addMonthsSafeFixed(dateValue, months) {
+    if (!dateValue || !months) return null;
+    const d = new Date(dateValue);
+    d.setMonth(d.getMonth() + Number(months));
+    return d;
+  }
+
+  function getMaintenanceStateFixed(template, records, allTemplates = []) {
+    const now = new Date();
+    const intervalHours = extractIntervalHoursFixed(template);
+    const toleranceHours = intervalHours && intervalHours >= 100 ? 10 : (intervalHours === 25 ? 5 : 0);
+    // is_one_time flag: 25h, 200h, 600h… fire ONCE at TSN ±tolerance, never repeat.
+    // Legacy fallback: intervalHours === 25 was always treated as one-time.
+    const isOneTime = Boolean(template.is_one_time) || intervalHours === 25;
+    const annualMonths = template.interval_months != null ? Number(template.interval_months) : (intervalHours === 100 ? 12 : null);
+    const annualToleranceMonths = annualMonths && intervalHours === 100 ? 2 : 0;
+    const tsn = aircraft.total_hours_tsn != null ? Number(aircraft.total_hours_tsn) : null;
+
+    const hourRecords = [...records]
+      .filter(record => record.hours_at_completion != null && record.hours_at_completion !== '')
+      .sort((a, b) => Number(a.hours_at_completion) - Number(b.hours_at_completion));
+
+    const latestByDate = [...records]
+      .filter(record => record.completed_date)
+      .sort((a, b) => new Date(b.completed_date) - new Date(a.completed_date))[0] || null;
+
+    let nextDueHours = intervalHours;
+    let hourStatus = 'ok';
+
+    // ── ONE-TIME milestone (25h, 200h, 600h…) ─────────────────────────────
+    // Fires once at TSN within ±tolerance of interval_hours, never again.
+    if (isOneTime && intervalHours != null) {
+      if (records.length > 0) {
+        // Already done — locked, never fires again.
+        nextDueHours = null;
+      } else if (tsn != null) {
+        const distance = tsn - intervalHours;
+        if (distance > toleranceHours) hourStatus = 'overdue';
+        else if (distance >= -Math.min(20, intervalHours)) hourStatus = 'dueSoon';
+      }
+    } else if (intervalHours != null) {
+      // ── RECURRING hours (100h every 100h, etc.) ─────────────────────────
+      for (const record of hourRecords) {
+        const completedAt = Number(record.hours_at_completion);
+        if (!Number.isFinite(completedAt)) continue;
+
+        if (completedAt < nextDueHours) {
+          nextDueHours = completedAt + intervalHours;
+        } else if (completedAt <= nextDueHours + toleranceHours) {
+          nextDueHours += intervalHours;
+        } else {
+          const wholeIntervals = Math.max(1, Math.floor(completedAt / intervalHours));
+          nextDueHours = Math.max((wholeIntervals + 1) * intervalHours, completedAt + intervalHours);
+        }
+      }
+
+      if (tsn != null && nextDueHours != null) {
+        if (tsn > nextDueHours + toleranceHours) hourStatus = 'overdue';
+        else if (tsn >= nextDueHours - Math.min(20, intervalHours)) hourStatus = 'dueSoon';
+      }
+    }
+
+    // ── Calendar interval (annual etc.) — only for recurring templates ────
+    // One-time milestones don't use a date trigger.
+    let nextDueDate = null;
+    let dateStatus = 'ok';
+    if (annualMonths && !isOneTime) {
+      const referenceDate =
+        latestByDate?.completed_date ||
+        aircraft.first_flight_date ||
+        aircraft.delivery_date ||
+        aircraft.created_at;
+
+      if (referenceDate) {
+        nextDueDate = addMonthsSafeFixed(referenceDate, annualMonths);
+        const overdueDate = addMonthsSafeFixed(referenceDate, annualMonths + annualToleranceMonths);
+        const daysUntil = Math.ceil((nextDueDate - now) / 86400000);
+        if (overdueDate && now > overdueDate) dateStatus = 'overdue';
+        else if (daysUntil <= 60) dateStatus = 'dueSoon';
+      }
+    }
+
+    // ── SUPERSESSION ───────────────────────────────────────────────────────
+    // If this is a recurring template (e.g. 100h) AND a larger ONE-TIME
+    // milestone is currently active for the same aircraft (e.g. 200h or 600h),
+    // and that milestone's TSN value is a multiple of THIS template's interval,
+    // then suppress this row — doing the milestone will satisfy this template.
+    let supersededBy = null;
+    if (!isOneTime && intervalHours && tsn != null) {
+      for (const t of allTemplates) {
+        if (t.id === template.id) continue;
+        if (!t.is_one_time) continue;
+        const tInterval = t.interval_hours != null ? Number(t.interval_hours) : null;
+        if (!tInterval || tInterval <= intervalHours) continue;
+        if (tInterval % intervalHours !== 0) continue;
+        // Skip if the milestone has already been completed for this aircraft
+        // (recordsByTemplate is closed over from MaintenanceTab's scope above)
+        const tDoneOnThisAircraft = (recordsByTemplate?.[t.id] || []).length > 0;
+        if (tDoneOnThisAircraft) continue;
+        // Active when TSN is within ±tolerance of the milestone value
+        if (Math.abs(tsn - tInterval) <= 10) {
+          if (!supersededBy || Number(supersededBy.interval_hours) < tInterval) {
+            supersededBy = t;
+          }
+        }
+      }
+    }
+
+    let status = 'ok';
+    if (hourStatus === 'overdue' || dateStatus === 'overdue') status = 'overdue';
+    else if (hourStatus === 'dueSoon' || dateStatus === 'dueSoon') status = 'dueSoon';
+    if (supersededBy) status = 'superseded';
+
+    return {
+      status,
+      nextDueHours,
+      nextDueDate,
+      intervalHours,
+      annualMonths,
+      isOneTime,
+      isInitial25: intervalHours === 25,
+      supersededBy,
+      canDirectComplete: status === 'overdue' || status === 'dueSoon',
+    };
+  }
+
+  function dueBadgeFixed(state, latest) {
+    const servicedByUs = aircraft.serviced_by_us;
+    if (state.status === 'superseded') {
+      const supTitle = state.supersededBy?.title || `${state.supersededBy?.interval_hours}h`;
+      return <span className="badge badge-info" style={{ fontSize: 10 }} title={`Will be done as part of ${supTitle}`}>
+        Superseded by {supTitle}
+      </span>;
+    }
+    // For non-serviced aircraft: suppress "Never done" / "Not due" / overdue badges
+    if (!servicedByUs) {
+      if (!latest) return null;
+      if (state.isOneTime && latest) return <span className="badge badge-success" style={{ fontSize: 10 }}>✓ Done (one-time)</span>;
+      return <span className="badge badge-success" style={{ fontSize: 10 }}>OK</span>;
+    }
+    if (!latest && state.isOneTime && state.status === 'ok') return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Not yet due</span>;
+    if (!latest && state.status === 'ok') return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Not due</span>;
+    if (!latest && state.status !== 'ok') return <span className="badge badge-ghost" style={{ fontSize: 10 }}>Never done</span>;
+    if (state.status === 'overdue') return <span className="badge badge-danger" style={{ fontSize: 10 }}>Overdue</span>;
+    if (state.status === 'dueSoon') return <span className="badge badge-warning" style={{ fontSize: 10 }}>Due soon</span>;
+    if (state.isOneTime && latest) return <span className="badge badge-success" style={{ fontSize: 10 }}>✓ Done (one-time)</span>;
+    return <span className="badge badge-success" style={{ fontSize: 10 }}>OK</span>;
+  }
+
   async function handleComplete(templateId) {
     if (!compForm.completed_date || !compForm.signed_by.trim()) return;
     setCompSaving(true);
@@ -436,6 +605,56 @@ function MaintenanceTab({
     }
   }
 
+  async function handleCreatePlannedMaintenance() {
+    if (!plannedForm.planned_arrival_date) {
+      toast.error('Planned date of arrival is required');
+      return;
+    }
+    if (!plannedForm.items || plannedForm.items.length === 0) {
+      toast.error('Add at least one work item');
+      return;
+    }
+    for (const item of plannedForm.items) {
+      if (!item.template_id && !item.title.trim()) {
+        toast.error('Each work item must have a service template or a title');
+        return;
+      }
+    }
+
+    setPlannedSaving(true);
+    try {
+      const payload = {
+        planned_arrival_date: plannedForm.planned_arrival_date,
+        assigned_technician_id: plannedForm.assigned_technician_id || null,
+        planned_comments: plannedForm.planned_comments || null,
+        items: plannedForm.items.map(item => ({
+          template_id: item.template_id || null,
+          title: item.title || '',
+          description: item.description || null,
+        })),
+      };
+      const res = await createFleetPlannedMaintenance(aircraft.id, payload);
+      setPlannedMaintenance(prev => {
+        const next = [...prev, res.data];
+        return next.sort((a, b) => {
+          if (a.status !== b.status) return a.status === 'planned' ? -1 : 1;
+          const aDate = a.status === 'planned' ? a.planned_arrival_date || a.planned_date : a.completed_date;
+          const bDate = b.status === 'planned' ? b.planned_arrival_date || b.planned_date : b.completed_date;
+          return String(aDate || '').localeCompare(String(bDate || ''));
+        });
+      });
+      setPlannedForm({
+        ...EMPTY_PLANNED_MAINTENANCE,
+        planned_arrival_date: new Date().toISOString().slice(0, 10),
+      });
+      toast.success('Planned maintenance created');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create planned maintenance');
+    } finally {
+      setPlannedSaving(false);
+    }
+  }
+
   if (serviceTemplates.length === 0) {
     return (
       <>
@@ -444,7 +663,7 @@ function MaintenanceTab({
         <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', marginTop: 20 }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>🔧</div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>No service templates defined</div>
-          <p style={{ fontSize: 13 }}>Go to <strong>Admin → Fleet Config</strong> to add service intervals.</p>
+          <p style={{ fontSize: 13 }}>Go to <strong>Admin - Service Templates</strong> to add service intervals.</p>
         </div>
       </>
     );
@@ -452,8 +671,212 @@ function MaintenanceTab({
 
   return (
     <>
-      {/* Hours & inspection at top */}
+      {/* Hours at top */}
       <HoursSummary aircraft={aircraft} form={form} canEdit={canEdit} setF={setF} />
+
+      <div style={{ marginTop: 20 }} className="card">
+        <div className="card-header">
+          <span className="card-title">Planned Maintenance</span>
+        </div>
+
+        {canEdit ? (
+          <div style={{ marginBottom: 18 }}>
+            {/* Header row: date + technician */}
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
+              <FormField label="Planned Date of Arrival *" half>
+                <input
+                  type="date"
+                  value={plannedForm.planned_arrival_date}
+                  onChange={e => setPlannedForm(f => ({ ...f, planned_arrival_date: e.target.value }))}
+                />
+              </FormField>
+              <FormField label="Assigned Technician" half>
+                <select
+                  value={plannedForm.assigned_technician_id}
+                  onChange={e => setPlannedForm(f => ({ ...f, assigned_technician_id: e.target.value }))}
+                >
+                  <option value="">— Unassigned —</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </FormField>
+            </div>
+
+            {/* Work items */}
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>
+              Work Items
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+              {(plannedForm.items || []).map((item, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 200px' }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>
+                          Service Template
+                        </label>
+                        <select
+                          value={item.template_id}
+                          onChange={e => setPlannedForm(f => {
+                            const items = [...f.items];
+                            const tmpl = serviceTemplates.find(t => String(t.id) === e.target.value);
+                            items[idx] = { ...items[idx], template_id: e.target.value, title: tmpl ? `${tmpl.category} - ${tmpl.title}` : items[idx].title };
+                            return { ...f, items };
+                          })}
+                        >
+                          <option value="">— Custom task —</option>
+                          {serviceTemplates.map(t => (
+                            <option key={t.id} value={t.id}>{t.category} - {t.title}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={{ flex: '1 1 200px' }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>
+                          Title {!item.template_id && <span style={{ color: 'var(--danger)' }}>*</span>}
+                        </label>
+                        <input
+                          value={item.title}
+                          onChange={e => setPlannedForm(f => {
+                            const items = [...f.items];
+                            items[idx] = { ...items[idx], title: e.target.value };
+                            return { ...f, items };
+                          })}
+                          placeholder={item.template_id ? 'Optional override' : 'Describe the work'}
+                        />
+                      </div>
+                    </div>
+                    <input
+                      value={item.description}
+                      onChange={e => setPlannedForm(f => {
+                        const items = [...f.items];
+                        items[idx] = { ...items[idx], description: e.target.value };
+                        return { ...f, items };
+                      })}
+                      placeholder="Additional notes (optional)"
+                      style={{ fontSize: 13 }}
+                    />
+                  </div>
+                  <button
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, padding: '2px 4px', flexShrink: 0 }}
+                    onClick={() => setPlannedForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))}
+                    title="Remove item"
+                  >×</button>
+                </div>
+              ))}
+            </div>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 13, marginBottom: 14 }}
+              onClick={() => setPlannedForm(f => ({ ...f, items: [...(f.items || []), { ...EMPTY_PM_ITEM }] }))}
+            >
+              + Add Work Item
+            </button>
+
+            {/* Comments */}
+            <FormField label="Overall Comments">
+              <textarea
+                rows={2}
+                value={plannedForm.planned_comments}
+                onChange={e => setPlannedForm(f => ({ ...f, planned_comments: e.target.value }))}
+                placeholder="Scope, notes, or what should be checked"
+              />
+            </FormField>
+
+            <button className="btn btn-primary" disabled={plannedSaving} onClick={handleCreatePlannedMaintenance}>
+              {plannedSaving ? 'Saving...' : 'Add Planned Maintenance'}
+            </button>
+          </div>
+        ) : null}
+
+        {openPlannedItems.length === 0 && completedPlannedItems.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', margin: 0 }}>No planned maintenance scheduled for this aircraft.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {openPlannedItems.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 10 }}>
+                  Open Items
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {openPlannedItems.map(pm => (
+                    <div key={pm.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-secondary)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 700 }}>
+                            {pm.items && pm.items.length > 0
+                              ? `${pm.items.length} work item${pm.items.length !== 1 ? 's' : ''}`
+                              : pm.template_title || 'Planned Maintenance'}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            Arrival: {fmtDate(pm.planned_arrival_date || pm.planned_date)}
+                            {pm.assigned_technician_name && ` · ${pm.assigned_technician_name}`}
+                          </div>
+                          {pm.items && pm.items.length > 0 && (
+                            <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 13 }}>
+                              {pm.items.map(it => (
+                                <li key={it.id} style={{ marginBottom: 2 }}>
+                                  {it.title || it.template_title || '—'}
+                                  {it.description && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}> — {it.description}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {pm.planned_comments && (
+                            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap', color: 'var(--text-secondary)' }}>{pm.planned_comments}</div>
+                          )}
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <span className="badge badge-info" style={{ fontSize: 10 }}>Planned</span>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+                            Sign off from the Planned Maintenance page
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {completedPlannedItems.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 10 }}>
+                  Signed Off
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {completedPlannedItems.map(item => (
+                    <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-secondary)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{item.template_title}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            Completed {fmtDate(item.completed_date)} by {item.signed_off_by || '-'}
+                          </div>
+                          {item.signoff_notes && (
+                            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>{item.signoff_notes}</div>
+                          )}
+                          {item.additional_work && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+                              Extra work: {item.additional_work}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <span className="badge badge-success" style={{ fontSize: 10 }}>Completed</span>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+                            {item.labor_hours != null ? `${Number(item.labor_hours).toFixed(1)} h` : '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div style={{ marginTop: 24 }}>
         {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, templates]) => (
@@ -464,9 +887,10 @@ function MaintenanceTab({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {templates.map(t => {
                 const latest = latestByTemplate[t.id] || null;
-                const { byDate, byHours } = calcNextDue(t, latest, aircraft.total_hours_tsn);
                 const allRecords = recordsByTemplate[t.id] || [];
                 const isOpen = openForm === t.id;
+                const state = getMaintenanceStateFixed(t, allRecords, serviceTemplates);
+                const hasOpenPlan = openPlannedItems.some(item => Number(item.template_id) === Number(t.id));
 
                 return (
                   <div key={t.id} className="card" style={{ padding: 0 }}>
@@ -475,11 +899,13 @@ function MaintenanceTab({
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 700, fontSize: 14 }}>{t.title}</span>
-                          {dueBadge(t, latest)}
+                          {dueBadgeFixed(state, latest)}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                          {t.interval_hours && <span>Every {t.interval_hours}h</span>}
-                          {t.interval_months && <span>Every {t.interval_months} month{t.interval_months !== 1 ? 's' : ''}</span>}
+                          {state.isOneTime && state.intervalHours && <span>One-time milestone at {state.intervalHours}h TSN (±10h)</span>}
+                          {!state.isOneTime && state.intervalHours && <span>Every {state.intervalHours}h</span>}
+                          {!state.isOneTime && state.annualMonths && <span>or every {state.annualMonths} month{state.annualMonths !== 1 ? 's' : ''}</span>}
+                          {state.supersededBy && <span style={{ color: 'var(--accent)' }}>· superseded when {state.supersededBy.title || `${state.supersededBy.interval_hours}h`} is due</span>}
                           {t.description && <span style={{ fontStyle: 'italic' }}>{t.description}</span>}
                         </div>
                       </div>
@@ -495,31 +921,38 @@ function MaintenanceTab({
                               )}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>by {latest.signed_by}</div>
-                            {(byDate || byHours != null) && (
+                            {(state.nextDueDate || state.nextDueHours != null) && (
                               <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2 }}>
                                 Next due:{' '}
-                                {byDate && <span>{fmtDate(byDate)}</span>}
-                                {byDate && byHours != null && ' / '}
-                                {byHours != null && <span style={{ fontFamily: 'monospace' }}>{byHours.toFixed(0)}h TSN</span>}
+                                {state.nextDueDate && <span>{fmtDate(state.nextDueDate)}</span>}
+                                {state.nextDueDate && state.nextDueHours != null && ' / '}
+                                {state.nextDueHours != null && <span style={{ fontFamily: 'monospace' }}>{state.nextDueHours.toFixed(0)}h TSN</span>}
                               </div>
                             )}
                           </>
                         ) : (
-                          <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>Never completed</div>
+                          aircraft.serviced_by_us
+                            ? <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>Never completed</div>
+                            : null
                         )}
                       </div>
 
-                      {/* Action button */}
-                      <button
-                        className={`btn btn-sm ${isOpen ? 'btn-ghost' : 'btn-primary'}`}
-                        style={{ flexShrink: 0 }}
-                        onClick={() => {
-                          if (isOpen) { setOpenForm(null); setCompForm(EMPTY_COMPLETION); }
-                          else { setOpenForm(t.id); setCompForm({ ...EMPTY_COMPLETION, completed_date: new Date().toISOString().slice(0, 10) }); }
-                        }}
-                      >
-                        {isOpen ? '✕ Cancel' : '✓ Mark Complete'}
-                      </button>
+                      {/* Action button — only when aircraft is serviced by us */}
+                      {aircraft.serviced_by_us && state.canDirectComplete && !hasOpenPlan && (
+                        <button
+                          className={`btn btn-sm ${isOpen ? 'btn-ghost' : 'btn-primary'}`}
+                          style={{ flexShrink: 0 }}
+                          onClick={() => {
+                            if (isOpen) { setOpenForm(null); setCompForm(EMPTY_COMPLETION); }
+                            else { setOpenForm(t.id); setCompForm({ ...EMPTY_COMPLETION, completed_date: new Date().toISOString().slice(0, 10) }); }
+                          }}
+                        >
+                          {isOpen ? '✕ Cancel' : '✓ Mark Complete'}
+                        </button>
+                      )}
+                      {hasOpenPlan && (
+                        <span className="badge badge-info" style={{ fontSize: 10 }}>Planned</span>
+                      )}
                     </div>
 
                     {/* Completion inline form */}
@@ -625,7 +1058,7 @@ function MaintenanceTab({
 
 function HoursSummary({ aircraft, form, canEdit, setF }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 420px)', gap: 20 }}>
       <div className="card">
         <div style={{ fontWeight: 700, marginBottom: 16 }}>Time Since New (TSN)</div>
         {canEdit ? (
@@ -636,33 +1069,11 @@ function HoursSummary({ aircraft, form, canEdit, setF }) {
             <FormField label="Engine Hours">
               <input type="number" step="0.1" min="0" value={form.engine_hours} onChange={e => setF({ engine_hours: e.target.value })} placeholder="0.0" />
             </FormField>
-            <FormField label="Propeller Hours">
-              <input type="number" step="0.1" min="0" value={form.prop_hours} onChange={e => setF({ prop_hours: e.target.value })} placeholder="0.0" />
-            </FormField>
           </>
         ) : (
           <>
             <InfoRow label="Total (TSN)" value={aircraft.total_hours_tsn != null ? `${aircraft.total_hours_tsn.toFixed(1)} h` : null} mono />
             <InfoRow label="Engine"      value={aircraft.engine_hours != null ? `${aircraft.engine_hours.toFixed(1)} h` : null} mono />
-            <InfoRow label="Propeller"   value={aircraft.prop_hours != null ? `${aircraft.prop_hours.toFixed(1)} h` : null} mono />
-          </>
-        )}
-      </div>
-      <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 16 }}>Next Inspection Due</div>
-        {canEdit ? (
-          <>
-            <FormField label="By Date">
-              <input type="date" value={form.next_inspection_date} onChange={e => setF({ next_inspection_date: e.target.value })} />
-            </FormField>
-            <FormField label="By Hours">
-              <input type="number" step="1" min="0" value={form.next_inspection_hours} onChange={e => setF({ next_inspection_hours: e.target.value })} placeholder="Total hours at next inspection" />
-            </FormField>
-          </>
-        ) : (
-          <>
-            <InfoRow label="By Date"  value={fmtDate(aircraft.next_inspection_date)} />
-            <InfoRow label="By Hours" value={aircraft.next_inspection_hours != null ? `${aircraft.next_inspection_hours.toFixed(0)} h` : null} mono />
           </>
         )}
       </div>
@@ -692,6 +1103,9 @@ export default function FleetDetail() {
   const [events,     setEvents]     = useState([]);
   const [images,     setImages]     = useState([]);
   const [paperwork,  setPaperwork]  = useState([]);
+  const [partReplacements, setPartReplacements] = useState([]);
+  const [bulletins, setBulletins] = useState([]);
+  const [models, setModels] = useState([]);
 
   // Configuration options (from admin panel)
   const [configOptions,   setConfigOptions]   = useState([]);
@@ -702,6 +1116,8 @@ export default function FleetDetail() {
   // Service templates & records
   const [serviceTemplates, setServiceTemplates] = useState([]);
   const [serviceRecords,   setServiceRecords]   = useState([]);
+  const [plannedMaintenance, setPlannedMaintenance] = useState([]);
+  const [users, setUsers] = useState([]);
 
   // Event types (dynamic, from DB)
   const [eventTypes, setEventTypes] = useState([]);
@@ -709,14 +1125,36 @@ export default function FleetDetail() {
   // Contact modal
   const [cModal, setCModal] = useState(null);
 
-  // Serial add row
-  const [newSerial,    setNewSerial]    = useState({ component: '', serial_number: '', notes: '' });
+  // Serial add row (most fields are optional — only component + type are required)
+  const EMPTY_SERIAL = {
+    component: '', component_type: '', component_name: '',
+    serial_number: '', date_installed: '', expiry_date: '', repack_date: '',
+    software_version: '', system_id: '', password: '',
+    notes: '',
+  };
+  const [newSerial,    setNewSerial]    = useState(EMPTY_SERIAL);
   const [addingSerial, setAddingSerial] = useState(false);
   const [serialSaving, setSerialSaving] = useState(false);
+  const [editingSerialId, setEditingSerialId] = useState(null);
+  const [revealedPasswords, setRevealedPasswords] = useState({}); // { [serialId]: bool }
+  // Uninstall modal state
+  const [uninstallTarget, setUninstallTarget] = useState(null); // serial object being uninstalled
+  const EMPTY_UNINSTALL = { uninstalled_at: '', uninstall_reason: '', uninstall_tsn: '', uninstall_technician: '', uninstall_notes: '' };
+  const [uninstallForm,   setUninstallForm]   = useState(EMPTY_UNINSTALL);
+  const [uninstallSaving, setUninstallSaving] = useState(false);
+
+  // Paint codes (multiple per aircraft)
+  const [paints, setPaints] = useState([]);
+  const EMPTY_PAINT = { color_name: '', paint_code: '', area: '', notes: '' };
+  const [newPaint,    setNewPaint]    = useState(EMPTY_PAINT);
+  const [addingPaint, setAddingPaint] = useState(false);
+  const [editingPaintId, setEditingPaintId] = useState(null);
+  const [paintSaving, setPaintSaving] = useState(false);
 
   // Event form
   const [newEvent,    setNewEvent]    = useState(EMPTY_EVENT);
   const [eventSaving, setEventSaving] = useState(false);
+  const [editingEventId, setEditingEventId] = useState(null);
 
   // Image upload
   const [imgUploading, setImgUploading] = useState(false);
@@ -737,15 +1175,19 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes, tmplRes, etRes] = await Promise.all([
+      const [res, optsRes, tmplRes, etRes, modelRes, usersRes] = await Promise.all([
         getFleetAircraft(id),
         getFleetConfigOptions(),
         getFleetServiceTemplates(),
         getFleetEventTypes(),
+        getFleetModels(),
+        getUsers(),
       ]);
       setConfigOptions(optsRes.data || []);
       setServiceTemplates((tmplRes.data || []).filter(t => t.active));
       setEventTypes(etRes.data || []);
+      setModels((modelRes.data || []).map(item => item.name));
+      setUsers(usersRes.data || []);
       applyData(res.data);
     } finally {
       setLoading(false);
@@ -759,7 +1201,11 @@ export default function FleetDetail() {
     setEvents(a.events        || []);
     setImages(a.images        || []);
     setPaperwork(a.paperwork  || []);
+    setPartReplacements(a.part_replacements || []);
+    setBulletins(a.bulletins || []);
+    setPaints(a.paints || []);
     setServiceRecords(a.service_records || []);
+    setPlannedMaintenance(a.planned_maintenance || []);
     setSelectedConfig(new Set((a.selected_config || []).map(Number)));
     setConfigDirty(false);
     setForm({
@@ -781,10 +1227,8 @@ export default function FleetDetail() {
       airworthiness_expiry:  a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
       total_hours_tsn:       a.total_hours_tsn     != null ? String(a.total_hours_tsn)     : '',
       engine_hours:          a.engine_hours        != null ? String(a.engine_hours)        : '',
-      prop_hours:            a.prop_hours          != null ? String(a.prop_hours)          : '',
-      next_inspection_date:  a.next_inspection_date  ? a.next_inspection_date.slice(0, 10) : '',
-      next_inspection_hours: a.next_inspection_hours != null ? String(a.next_inspection_hours) : '',
       financing_flag:        a.financing_flag      || false,
+      serviced_by_us:        a.serviced_by_us      || false,
       notes:                 a.notes              || '',
     });
     setDirty(false);
@@ -798,7 +1242,16 @@ export default function FleetDetail() {
     setSaving(true);
     try {
       const res = await updateFleetAircraft(id, form);
-      applyData({ ...res.data, contacts, serials, events, images, service_records: serviceRecords, selected_config: [...selectedConfig] });
+      applyData({
+        ...res.data,
+        contacts,
+        serials,
+        events,
+        images,
+        service_records: serviceRecords,
+        planned_maintenance: plannedMaintenance,
+        selected_config: [...selectedConfig],
+      });
       toast.success('Aircraft saved');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -859,28 +1312,124 @@ export default function FleetDetail() {
   // ─── Serials ───────────────────────────────────────────────────────────────
 
   async function handleAddSerial(e) {
-    e.preventDefault();
-    if (!newSerial.component.trim() || !newSerial.serial_number.trim()) return;
+    if (e?.preventDefault) e.preventDefault();
+    const componentName = (newSerial.component_name || newSerial.component || '').trim();
+    // Only component name is required now; serial number is optional
+    if (!componentName) return;
     setSerialSaving(true);
     try {
-      const res = await addFleetSerial(id, newSerial);
-      setSerials(s => [...s, res.data]);
-      setNewSerial({ component: '', serial_number: '', notes: '' });
+      const payload = {
+        ...newSerial,
+        component: componentName,
+        component_name: componentName,
+      };
+      const action = editingSerialId
+        ? updateFleetSerial(id, editingSerialId, payload)
+        : addFleetSerial(id, payload);
+      const res = await action;
+      setSerials(s => editingSerialId ? s.map(item => item.id === editingSerialId ? res.data : item) : [...s, res.data]);
+      setNewSerial(EMPTY_SERIAL);
       setAddingSerial(false);
+      setEditingSerialId(null);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to add');
+      toast.error(err.response?.data?.error || 'Failed to save');
     } finally {
       setSerialSaving(false);
     }
   }
 
+  function handleEditSerial(serial) {
+    setEditingSerialId(serial.id);
+    setAddingSerial(true);
+    setNewSerial({
+      component: serial.component || '',
+      component_type: serial.component_type || '',
+      component_name: serial.component_name || '',
+      serial_number: serial.serial_number || '',
+      date_installed: serial.date_installed ? serial.date_installed.slice(0, 10) : '',
+      expiry_date: serial.expiry_date ? serial.expiry_date.slice(0, 10) : '',
+      repack_date: serial.repack_date ? serial.repack_date.slice(0, 10) : '',
+      software_version: serial.software_version || '',
+      system_id: serial.system_id || '',
+      password: serial.password || '',
+      notes: serial.notes || '',
+    });
+  }
+
+  function openUninstallModal(serial) {
+    setUninstallTarget(serial);
+    setUninstallForm({
+      ...EMPTY_UNINSTALL,
+      uninstalled_at: new Date().toISOString().slice(0, 10),
+      uninstall_tsn: aircraft?.total_hours_tsn != null ? String(aircraft.total_hours_tsn) : '',
+    });
+  }
+
+  async function handleConfirmUninstall() {
+    if (!uninstallTarget || !uninstallForm.uninstalled_at) return;
+    setUninstallSaving(true);
+    try {
+      const res = await uninstallFleetSerial(id, uninstallTarget.id, uninstallForm);
+      setSerials(s => s.map(item => item.id === uninstallTarget.id ? res.data : item));
+      setUninstallTarget(null);
+      setUninstallForm(EMPTY_UNINSTALL);
+      toast.success('Component marked as uninstalled');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to uninstall');
+    } finally {
+      setUninstallSaving(false);
+    }
+  }
+
   async function handleDeleteSerial(sid) {
-    if (!window.confirm('Delete this serial number entry?')) return;
+    if (!window.confirm('Delete this component entry completely? (Use Uninstall instead to preserve history.)')) return;
     try {
       await deleteFleetSerial(id, sid);
       setSerials(s => s.filter(x => x.id !== sid));
     } catch { toast.error('Delete failed'); }
   }
+
+  // ─── Paints ────────────────────────────────────────────────────────────────
+
+  async function handleSavePaint(e) {
+    if (e?.preventDefault) e.preventDefault();
+    if (!newPaint.color_name.trim()) return;
+    setPaintSaving(true);
+    try {
+      const action = editingPaintId
+        ? updateFleetPaint(id, editingPaintId, newPaint)
+        : addFleetPaint(id, newPaint);
+      const res = await action;
+      setPaints(p => editingPaintId ? p.map(x => x.id === editingPaintId ? res.data : x) : [...p, res.data]);
+      setNewPaint(EMPTY_PAINT);
+      setAddingPaint(false);
+      setEditingPaintId(null);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save paint');
+    } finally { setPaintSaving(false); }
+  }
+
+  function handleEditPaint(p) {
+    setEditingPaintId(p.id);
+    setAddingPaint(true);
+    setNewPaint({
+      color_name: p.color_name || '',
+      paint_code: p.paint_code || '',
+      area: p.area || '',
+      notes: p.notes || '',
+    });
+  }
+
+  async function handleDeletePaint(pid) {
+    if (!window.confirm('Delete this paint entry?')) return;
+    try {
+      await deleteFleetPaint(id, pid);
+      setPaints(p => p.filter(x => x.id !== pid));
+    } catch { toast.error('Delete failed'); }
+  }
+
+  // (Legacy part-replacement handlers removed — replaced by the Uninstall flow
+  //  on each component card.)
 
   // ─── Events ────────────────────────────────────────────────────────────────
 
@@ -889,14 +1438,38 @@ export default function FleetDetail() {
     if (!newEvent.event_date || !newEvent.title.trim()) return;
     setEventSaving(true);
     try {
-      const res = await addFleetEvent(id, newEvent);
-      setEvents(ev => [res.data, ...ev]);
+      if (editingEventId) {
+        const res = await updateFleetEvent(id, editingEventId, newEvent);
+        setEvents(ev => ev.map(item => item.id === editingEventId ? res.data : item));
+        toast.success('Event updated');
+      } else {
+        const res = await addFleetEvent(id, newEvent);
+        setEvents(ev => [res.data, ...ev]);
+        toast.success('Event added');
+      }
       setNewEvent(EMPTY_EVENT);
+      setEditingEventId(null);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to add event');
+      toast.error(err.response?.data?.error || `Failed to ${editingEventId ? 'update' : 'add'} event`);
     } finally {
       setEventSaving(false);
     }
+  }
+
+  function handleEditEvent(event) {
+    setEditingEventId(event.id);
+    setNewEvent({
+      event_date: event.event_date ? String(event.event_date).slice(0, 10) : '',
+      event_type: event.event_type || 'service',
+      title: event.title || '',
+      description: event.description || '',
+      hours_at_event: event.hours_at_event != null ? String(event.hours_at_event) : '',
+    });
+  }
+
+  function handleCancelEventEdit() {
+    setEditingEventId(null);
+    setNewEvent(EMPTY_EVENT);
   }
 
   async function handleDeleteEvent(eid) {
@@ -929,7 +1502,7 @@ export default function FleetDetail() {
   async function handleSaveCaption(imgId) {
     const caption = captionEdit[imgId] ?? '';
     try {
-      const res = await updateFleetImageCaption(id, imgId, caption);
+      const res = await updateFleetImageCaption(id, imgId, { caption });
       setImages(imgs => imgs.map(x => x.id === imgId ? res.data : x));
       setCaptionEdit(c => { const n = { ...c }; delete n[imgId]; return n; });
     } catch { toast.error('Caption update failed'); }
@@ -1009,6 +1582,10 @@ export default function FleetDetail() {
   );
 
   const canEdit = isSupervisor;
+  const canEditComponents = isSupervisor;
+  const canEditEvents = isSupervisor;
+  const canEditGallery = isSupervisor;
+  const canEditReplacements = isSupervisor;
 
   return (
     <div className="page">
@@ -1020,9 +1597,6 @@ export default function FleetDetail() {
           </button>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'rgba(99,102,241,0.1)', borderRadius: 4, padding: '2px 7px' }}>
-                #{aircraft.fleet_number}
-              </span>
               <span style={{ fontSize: 20, fontWeight: 800 }}>{aircraft.bw_serial}</span>
               {aircraft.aircraft_number && (
                 <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>/ {aircraft.aircraft_number}</span>
@@ -1103,6 +1677,7 @@ export default function FleetDetail() {
 
       {/* ── OVERVIEW ─────────────────────────────────────────────────────────── */}
       {tab === 'Overview' && (
+        <div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20 }}>
           {/* Identity */}
           <div className="card">
@@ -1120,7 +1695,7 @@ export default function FleetDetail() {
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
                   <FormField label="Model" half>
                     <select value={form.model} onChange={e => setF({ model: e.target.value })}>
-                      {MODELS.map(m => <option key={m}>{m}</option>)}
+                      {(models.length > 0 ? models : MODEL_FALLBACKS).map(m => <option key={m}>{m}</option>)}
                     </select>
                   </FormField>
                   <FormField label="Build Status" half>
@@ -1188,12 +1763,24 @@ export default function FleetDetail() {
                     <span style={{ fontSize: 13 }}>Aircraft is on financing / leasing</span>
                   </label>
                 </FormField>
+                <FormField label="">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '8px 0' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!form.serviced_by_us}
+                      onChange={e => setF({ serviced_by_us: e.target.checked })}
+                      style={{ width: 16, height: 16 }}
+                    />
+                    <span style={{ fontSize: 13 }}>We service this aircraft (include in maintenance tracking)</span>
+                  </label>
+                </FormField>
               </>
             ) : (
               <>
                 <InfoRow label="First Flight" value={fmtDate(aircraft.first_flight_date)} />
                 <InfoRow label="Delivery" value={fmtDate(aircraft.delivery_date)} />
                 <InfoRow label="Financing" value={aircraft.financing_flag ? '💳 Yes' : 'No'} />
+                <InfoRow label="Serviced by us" value={aircraft.serviced_by_us ? '✓ Yes' : 'No'} />
               </>
             )}
 
@@ -1223,6 +1810,96 @@ export default function FleetDetail() {
             )}
           </div>
 
+          {/* Paint Codes — multiple per aircraft */}
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700 }}>
+                Paint Codes <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>({paints.length})</span>
+              </div>
+              {canEdit && !addingPaint && (
+                <button className="btn btn-ghost btn-sm" onClick={() => { setAddingPaint(true); setEditingPaintId(null); setNewPaint(EMPTY_PAINT); }}>
+                  + Add Paint
+                </button>
+              )}
+            </div>
+
+            {addingPaint && canEdit && (
+              <form onSubmit={handleSavePaint} style={{ marginBottom: 14, padding: 12, background: 'var(--bg-hover)', borderRadius: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                  <FormField label="Color name *">
+                    <input
+                      value={newPaint.color_name}
+                      onChange={e => setNewPaint(n => ({ ...n, color_name: e.target.value }))}
+                      placeholder="e.g. Pearl White"
+                      autoFocus required
+                    />
+                  </FormField>
+                  <FormField label="Paint code">
+                    <input
+                      value={newPaint.paint_code}
+                      onChange={e => setNewPaint(n => ({ ...n, paint_code: e.target.value }))}
+                      placeholder="e.g. RAL 9010 / PPG ABC"
+                      style={{ fontFamily: 'monospace' }}
+                    />
+                  </FormField>
+                  <FormField label="Area">
+                    <input
+                      value={newPaint.area}
+                      onChange={e => setNewPaint(n => ({ ...n, area: e.target.value }))}
+                      placeholder="e.g. Fuselage / Stripes / Cowl"
+                    />
+                  </FormField>
+                  <FormField label="Notes">
+                    <input
+                      value={newPaint.notes}
+                      onChange={e => setNewPaint(n => ({ ...n, notes: e.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </FormField>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={paintSaving}>
+                    {paintSaving ? 'Saving…' : (editingPaintId ? '💾 Save' : '+ Add')}
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAddingPaint(false); setEditingPaintId(null); setNewPaint(EMPTY_PAINT); }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {paints.length === 0 ? (
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
+                {canEdit ? 'No paint codes recorded yet.' : 'No paint codes.'}
+              </p>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                {paints.map(p => (
+                  <div key={p.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{p.color_name}</div>
+                      {canEdit && (
+                        <div style={{ display: 'flex', gap: 2 }}>
+                          <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', fontSize: 11 }} onClick={() => handleEditPaint(p)}>✎</button>
+                          <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', fontSize: 11, color: 'var(--danger)' }} onClick={() => handleDeletePaint(p.id)}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                    {p.paint_code && (
+                      <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-secondary)', marginBottom: 2 }}>{p.paint_code}</div>
+                    )}
+                    {p.area && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.area}</div>
+                    )}
+                    {p.notes && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontStyle: 'italic' }}>{p.notes}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Notes */}
           <div className="card" style={{ gridColumn: '1 / -1' }}>
             <div style={{ fontWeight: 700, marginBottom: 12 }}>Notes</div>
@@ -1240,6 +1917,7 @@ export default function FleetDetail() {
               </p>
             )}
           </div>
+        </div>
         </div>
       )}
 
@@ -1260,103 +1938,275 @@ export default function FleetDetail() {
           serviceTemplates={serviceTemplates}
           serviceRecords={serviceRecords}
           setServiceRecords={setServiceRecords}
+          plannedMaintenance={plannedMaintenance}
+          setPlannedMaintenance={setPlannedMaintenance}
           form={form}
           canEdit={canEdit}
           setF={setF}
           isSupervisor={isSupervisor}
           toast={toast}
+          users={users}
         />
       )}
 
       {/* ── COMPONENTS ───────────────────────────────────────────────────────── */}
       {tab === 'Components' && (
-        <div className="card" style={{ padding: 0 }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontWeight: 700 }}>Component Serial Numbers</div>
-            {canEdit && !addingSerial && (
-              <button className="btn btn-primary btn-sm" onClick={() => setAddingSerial(true)}>+ Add Component</button>
-            )}
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Component</th>
-                  <th>Serial Number</th>
-                  <th>Notes</th>
-                  {canEdit && <th style={{ width: 50 }}></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {serials.length === 0 && !addingSerial && (
-                  <tr>
-                    <td colSpan={canEdit ? 4 : 3} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '32px 16px' }}>
-                      No component serial numbers recorded.
-                      {canEdit && ' Click "+ Add Component" to begin.'}
-                    </td>
-                  </tr>
-                )}
-                {serials.map(s => (
-                  <tr key={s.id}>
-                    <td style={{ fontWeight: 600, fontSize: 13 }}>{s.component}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{s.serial_number}</td>
-                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{s.notes || '—'}</td>
-                    {canEdit && (
-                      <td>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          style={{ color: 'var(--danger)', padding: '2px 8px' }}
-                          onClick={() => handleDeleteSerial(s.id)}
-                        >
-                          ✕
-                        </button>
-                      </td>
+        <>
+        {(() => {
+          // Split active vs uninstalled. Uninstalled components are preserved
+          // so the user can see the full history of what was on the aircraft.
+          const activeComponents      = serials.filter(s => !s.uninstalled);
+          const uninstalledComponents = serials.filter(s =>  s.uninstalled);
+
+          // Helper: render a labelled field row only when there's a value.
+          function Field({ label, value, mono, children }) {
+            if (children == null && (value == null || value === '')) return null;
+            return (
+              <div style={{ display: 'flex', gap: 8, fontSize: 12, padding: '3px 0' }}>
+                <span style={{ color: 'var(--text-muted)', minWidth: 110 }}>{label}</span>
+                <span style={{ color: 'var(--text-secondary)', fontFamily: mono ? 'monospace' : undefined, wordBreak: 'break-word' }}>
+                  {children ?? value}
+                </span>
+              </div>
+            );
+          }
+
+          function ComponentCard({ s, isUninstalled }) {
+            const revealed = !!revealedPasswords[s.id];
+            return (
+              <div className="card" style={{ padding: 14, opacity: isUninstalled ? 0.85 : 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{s.component_name || s.component}</div>
+                    {s.component_type && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{s.component_type}</div>
                     )}
-                  </tr>
-                ))}
-                {addingSerial && (
-                  <tr style={{ background: 'var(--bg-hover)' }}>
-                    <td>
-                      <input
-                        list="component-suggestions"
-                        value={newSerial.component}
-                        onChange={e => setNewSerial(n => ({ ...n, component: e.target.value }))}
-                        placeholder="Component name"
-                        style={{ fontSize: 13 }}
-                        autoFocus
-                      />
-                      <datalist id="component-suggestions">
-                        {DEFAULT_COMPONENTS.map(c => <option key={c} value={c} />)}
-                      </datalist>
-                    </td>
-                    <td>
-                      <input
-                        value={newSerial.serial_number}
-                        onChange={e => setNewSerial(n => ({ ...n, serial_number: e.target.value }))}
-                        placeholder="Serial number"
-                        style={{ fontFamily: 'monospace', fontSize: 13 }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={newSerial.notes}
-                        onChange={e => setNewSerial(n => ({ ...n, notes: e.target.value }))}
-                        placeholder="Optional notes"
-                        style={{ fontSize: 12 }}
-                      />
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button className="btn btn-primary btn-sm" onClick={handleAddSerial} disabled={serialSaving}>✓</button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => { setAddingSerial(false); setNewSerial({ component: '', serial_number: '', notes: '' }); }}>✕</button>
-                      </div>
-                    </td>
-                  </tr>
+                  </div>
+                  {isUninstalled && <span className="badge badge-ghost" style={{ fontSize: 10 }}>Uninstalled</span>}
+                </div>
+
+                {/* Only the fields with values render */}
+                <Field label="Serial number"    value={s.serial_number} mono />
+                <Field label="System ID"        value={s.system_id} mono />
+                <Field label="Software version" value={s.software_version} mono />
+                {s.password && (
+                  <Field label="Password">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <code style={{ fontFamily: 'monospace' }}>{revealed ? s.password : '••••••••'}</code>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ padding: '0 6px', fontSize: 11 }}
+                        onClick={() => setRevealedPasswords(p => ({ ...p, [s.id]: !p[s.id] }))}
+                      >{revealed ? 'Hide' : 'Reveal'}</button>
+                    </span>
+                  </Field>
                 )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                <Field label="Installed"  value={s.date_installed ? new Date(s.date_installed).toLocaleDateString() : ''} />
+                <Field label="Expiry"     value={s.expiry_date    ? new Date(s.expiry_date).toLocaleDateString()    : ''} />
+                <Field label="Repack"     value={s.repack_date    ? new Date(s.repack_date).toLocaleDateString()    : ''} />
+                <Field label="Notes"      value={s.notes} />
+
+                {/* Uninstall details — only on uninstalled cards */}
+                {isUninstalled && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
+                    <Field label="Uninstalled"  value={s.uninstalled_at ? new Date(s.uninstalled_at).toLocaleDateString() : ''} />
+                    <Field label="Reason"       value={s.uninstall_reason} />
+                    <Field label="TSN at remove" value={s.uninstall_tsn != null ? `${parseFloat(s.uninstall_tsn).toFixed(1)} h` : ''} mono />
+                    <Field label="Technician"   value={s.uninstall_technician} />
+                    <Field label="Notes"        value={s.uninstall_notes} />
+                  </div>
+                )}
+
+                {canEditComponents && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
+                    {!isUninstalled && (
+                      <>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleEditSerial(s)}>Edit</button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: 'var(--warning)' }} onClick={() => openUninstallModal(s)}>
+                          ⏏ Uninstall
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ color: 'var(--danger)', marginLeft: 'auto' }}
+                      onClick={() => handleDeleteSerial(s.id)}
+                    >✕ Delete</button>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <>
+              {/* Active Components header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontWeight: 700 }}>Active Components <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>({activeComponents.length})</span></div>
+                {canEditComponents && !addingSerial && (
+                  <button className="btn btn-primary btn-sm" onClick={() => setAddingSerial(true)}>+ Add Component</button>
+                )}
+              </div>
+
+              {/* Add / Edit form */}
+              {addingSerial && canEditComponents && (
+                <div className="card" style={{ marginBottom: 16, background: 'var(--bg-hover)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 12 }}>{editingSerialId ? 'Edit Component' : 'New Component'}</div>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0, marginBottom: 14 }}>
+                    Only <strong>Component name</strong> and <strong>Type</strong> are required. Leave any field blank to hide it on the card.
+                  </p>
+                  <form onSubmit={handleAddSerial}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                      <FormField label="Component name *">
+                        <input
+                          value={newSerial.component_name}
+                          onChange={e => setNewSerial(n => ({ ...n, component_name: e.target.value, component: e.target.value }))}
+                          autoFocus required
+                        />
+                      </FormField>
+                      <FormField label="Type *">
+                        <input
+                          value={newSerial.component_type}
+                          onChange={e => setNewSerial(n => ({ ...n, component_type: e.target.value }))}
+                          placeholder="e.g. Avionics, Engine"
+                          required
+                        />
+                      </FormField>
+                      <FormField label="Serial number">
+                        <input
+                          value={newSerial.serial_number}
+                          onChange={e => setNewSerial(n => ({ ...n, serial_number: e.target.value }))}
+                          style={{ fontFamily: 'monospace' }}
+                        />
+                      </FormField>
+                      <FormField label="System ID">
+                        <input
+                          value={newSerial.system_id}
+                          onChange={e => setNewSerial(n => ({ ...n, system_id: e.target.value }))}
+                          style={{ fontFamily: 'monospace' }}
+                        />
+                      </FormField>
+                      <FormField label="Software version">
+                        <input
+                          value={newSerial.software_version}
+                          onChange={e => setNewSerial(n => ({ ...n, software_version: e.target.value }))}
+                        />
+                      </FormField>
+                      <FormField label="Password">
+                        <input
+                          type="text"
+                          value={newSerial.password}
+                          onChange={e => setNewSerial(n => ({ ...n, password: e.target.value }))}
+                          placeholder="Device / system password"
+                          autoComplete="off"
+                        />
+                      </FormField>
+                      <FormField label="Date installed">
+                        <input type="date" value={newSerial.date_installed} onChange={e => setNewSerial(n => ({ ...n, date_installed: e.target.value }))} />
+                      </FormField>
+                      <FormField label="Expiry date">
+                        <input type="date" value={newSerial.expiry_date} onChange={e => setNewSerial(n => ({ ...n, expiry_date: e.target.value }))} />
+                      </FormField>
+                      <FormField label="Repack date">
+                        <input type="date" value={newSerial.repack_date} onChange={e => setNewSerial(n => ({ ...n, repack_date: e.target.value }))} />
+                      </FormField>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <FormField label="Notes">
+                          <textarea rows={2} value={newSerial.notes} onChange={e => setNewSerial(n => ({ ...n, notes: e.target.value }))} />
+                        </FormField>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button type="submit" className="btn btn-primary" disabled={serialSaving}>
+                        {serialSaving ? 'Saving…' : (editingSerialId ? '💾 Save' : '+ Add Component')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => { setAddingSerial(false); setEditingSerialId(null); setNewSerial(EMPTY_SERIAL); }}
+                      >Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Active components grid */}
+              {activeComponents.length === 0 ? (
+                <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                  No active components.{canEditComponents && ' Click "+ Add Component" to add one.'}
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                  {activeComponents.map(s => <ComponentCard key={s.id} s={s} isUninstalled={false} />)}
+                </div>
+              )}
+
+              {/* Uninstalled history */}
+              {uninstalledComponents.length > 0 && (
+                <div style={{ marginTop: 28 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 12 }}>
+                    Uninstalled Components <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>({uninstalledComponents.length})</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                    {uninstalledComponents.map(s => <ComponentCard key={s.id} s={s} isUninstalled={true} />)}
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
+
+        {bulletins.length > 0 && (() => {
+          const BULLETIN_BADGE = {
+            mandatory:   { label: 'Mandatory',   cls: 'badge-danger'  },
+            obligatory:  { label: 'Obligatory',  cls: 'badge-warning' },
+            recommended: { label: 'Recommended', cls: 'badge-info'    },
+            optional:    { label: 'Optional',    cls: 'badge-ghost'   },
+          };
+          return (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 700, marginBottom: 12 }}>Bulletins Affecting This Aircraft</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {bulletins.map(item => {
+                  const meta = BULLETIN_BADGE[item.category] || BULLETIN_BADGE.optional;
+                  return (
+                    <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                            <span className={`badge ${meta.cls}`} style={{ fontSize: 10 }}>{meta.label}</span>
+                            <span style={{ fontWeight: 700 }}>{item.title}</span>
+                          </div>
+                          {item.reason && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                              <strong>Reason:</strong> {item.reason}
+                            </div>
+                          )}
+                          {item.what_to_do && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                              <strong>What to do:</strong> {item.what_to_do}
+                            </div>
+                          )}
+                          {item.aircraft_status === 'resolved' && item.signed_off_by && (
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                              Signed off by {item.signed_off_by}
+                              {item.resolved_at && ` on ${new Date(item.resolved_at).toLocaleDateString()}`}
+                            </div>
+                          )}
+                        </div>
+                        <span className={`badge ${item.aircraft_status === 'open' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 10, flexShrink: 0 }}>
+                          {item.aircraft_status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+        </>
       )}
 
       {/* ── EVENTS ───────────────────────────────────────────────────────────── */}
@@ -1394,6 +2244,11 @@ export default function FleetDetail() {
                         )}
                       </div>
                       {canEdit && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleEditEvent(ev)}>
+                          Edit
+                        </button>
+                      )}
+                      {canEdit && (
                         <button
                           className="btn btn-ghost btn-sm"
                           style={{ color: 'var(--danger)', flexShrink: 0 }}
@@ -1411,7 +2266,7 @@ export default function FleetDetail() {
 
           {/* Add event form */}
           <div className="card" style={{ position: 'sticky', top: 20 }}>
-            <div style={{ fontWeight: 700, marginBottom: 14 }}>Log New Event</div>
+            <div style={{ fontWeight: 700, marginBottom: 14 }}>{editingEventId ? 'Edit Event' : 'Log New Event'}</div>
             <form onSubmit={handleAddEvent}>
               <FormField label="Date *">
                 <input type="date" value={newEvent.event_date} onChange={e => setNewEvent(n => ({ ...n, event_date: e.target.value }))} required />
@@ -1436,6 +2291,11 @@ export default function FleetDetail() {
               <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={eventSaving}>
                 {eventSaving ? 'Saving…' : '+ Log Event'}
               </button>
+              {editingEventId && (
+                <button type="button" className="btn btn-ghost" style={{ width: '100%', marginTop: 8 }} onClick={handleCancelEventEdit}>
+                  Cancel Edit
+                </button>
+              )}
             </form>
           </div>
         </div>
@@ -1499,12 +2359,12 @@ export default function FleetDetail() {
                     </div>
                     <div style={{ padding: '10px 12px' }}>
                       {isEditing ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
+                        <div style={{ display: 'grid', gap: 8 }}>
                           <input
-                            value={captionEdit[img.id]}
+                            value={captionEdit[img.id] ?? ''}
                             onChange={e => setCaptionEdit(c => ({ ...c, [img.id]: e.target.value }))}
                             placeholder="Caption…"
-                            style={{ flex: 1, fontSize: 12 }}
+                            style={{ width: '100%', fontSize: 12 }}
                             autoFocus
                             onKeyDown={e => {
                               if (e.key === 'Enter') handleSaveCaption(img.id);
@@ -1794,6 +2654,67 @@ export default function FleetDetail() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Uninstall Component Modal ───────────────────────────────────────── */}
+      {uninstallTarget && (
+        <div className="modal-overlay" onClick={() => setUninstallTarget(null)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">
+              Uninstall — {uninstallTarget.component_name || uninstallTarget.component}
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: -6, marginBottom: 16 }}>
+              The component is preserved in the Uninstalled history with the details below.
+            </p>
+            <FormField label="Uninstall Date *">
+              <input
+                type="date"
+                value={uninstallForm.uninstalled_at}
+                onChange={e => setUninstallForm(f => ({ ...f, uninstalled_at: e.target.value }))}
+                required
+              />
+            </FormField>
+            <FormField label="TSN at uninstall (hours)">
+              <input
+                type="number" step="0.1" min="0"
+                value={uninstallForm.uninstall_tsn}
+                onChange={e => setUninstallForm(f => ({ ...f, uninstall_tsn: e.target.value }))}
+                placeholder={aircraft?.total_hours_tsn != null ? `Current: ${aircraft.total_hours_tsn}` : ''}
+              />
+            </FormField>
+            <FormField label="Technician">
+              <input
+                value={uninstallForm.uninstall_technician}
+                onChange={e => setUninstallForm(f => ({ ...f, uninstall_technician: e.target.value }))}
+                placeholder="Name of technician"
+              />
+            </FormField>
+            <FormField label="Reason">
+              <input
+                value={uninstallForm.uninstall_reason}
+                onChange={e => setUninstallForm(f => ({ ...f, uninstall_reason: e.target.value }))}
+                placeholder="e.g. End of life, upgrade, failure…"
+              />
+            </FormField>
+            <FormField label="Notes">
+              <textarea
+                rows={3}
+                value={uninstallForm.uninstall_notes}
+                onChange={e => setUninstallForm(f => ({ ...f, uninstall_notes: e.target.value }))}
+              />
+            </FormField>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setUninstallTarget(null)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={handleConfirmUninstall}
+                disabled={uninstallSaving || !uninstallForm.uninstalled_at}
+              >
+                {uninstallSaving ? 'Saving…' : '⏏ Uninstall Component'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

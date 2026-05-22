@@ -3,6 +3,9 @@ import {
   getUsers, createUser, updateUser,
   getTaskTemplates, getStations, createTemplate, updateTemplate,
   getAuditLog,
+  getFleetModelsAdmin, createFleetModel, updateFleetModel, deleteFleetModel,
+  getFleetBulletins, getFleetBulletin, createFleetBulletin, updateFleetBulletin, deleteFleetBulletin,
+  getFleetBulletinAircraft, resolveFleetBulletinAircraft,
   getFleetConfigOptions, createFleetConfigOption, updateFleetConfigOption, deleteFleetConfigOption,
   getFleetServiceTemplates, createFleetServiceTemplate, updateFleetServiceTemplate, deleteFleetServiceTemplate,
   getFleetEventTypes, createFleetEventType, updateFleetEventType, deleteFleetEventType,
@@ -10,7 +13,7 @@ import {
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Configuration Config', 'Service Templates', 'Event Types'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -42,9 +45,11 @@ export default function AdminPanel() {
       </div>
 
       {tab === 0 && <UsersTab />}
-      {tab === 1 && <FleetConfigTab />}
-      {tab === 2 && <ServiceTemplatesSection />}
-      {tab === 3 && <EventTypesSection />}
+      {tab === 1 && <ModelsTab />}
+      {tab === 2 && <BulletinsTab />}
+      {tab === 3 && <FleetConfigTab />}
+      {tab === 4 && <ServiceTemplatesSection />}
+      {tab === 5 && <EventTypesSection />}
     </div>
   );
 }
@@ -1077,8 +1082,659 @@ function EventTypesSection() {
   );
 }
 
+function ModelsTab() {
+  const toast = useToast();
+  const [models, setModels] = useState([]);
+  const [form, setForm] = useState({ name: '', code: '', active: true });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await getFleetModelsAdmin();
+      setModels(res.data || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      if (editingId) {
+        await updateFleetModel(editingId, form);
+        toast.success('Model updated');
+      } else {
+        await createFleetModel(form);
+        toast.success('Model added');
+      }
+      setForm({ name: '', code: '', active: true });
+      setEditingId(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save model');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeModel(id) {
+    if (!window.confirm('Delete this model?')) return;
+    try {
+      await deleteFleetModel(id);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete model');
+    }
+  }
+
+  return (
+    <div className="card">
+      <div style={{ fontWeight: 700, marginBottom: 16 }}>Aircraft Models</div>
+      <form onSubmit={onSubmit} className="form-row form-row-3" style={{ marginBottom: 18 }}>
+        <div className="form-group">
+          <label>Model Name</label>
+          <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+        </div>
+        <div className="form-group">
+          <label>Code</label>
+          <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="Optional short code" />
+        </div>
+        <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
+            Active
+          </label>
+          <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Update Model' : 'Add Model'}</button>
+          {editingId && <button type="button" className="btn btn-ghost" onClick={() => { setEditingId(null); setForm({ name: '', code: '', active: true }); }}>Cancel</button>}
+        </div>
+      </form>
+
+      {loading ? <div style={{ color: 'var(--text-muted)' }}>Loading…</div> : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Code</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {models.map(model => (
+                <tr key={model.id}>
+                  <td>{model.name}</td>
+                  <td style={{ fontFamily: 'monospace' }}>{model.code || '—'}</td>
+                  <td><span className={`badge ${model.active ? 'badge-success' : 'badge-ghost'}`}>{model.active ? 'Active' : 'Inactive'}</span></td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => { setEditingId(model.id); setForm({ name: model.name || '', code: model.code || '', active: !!model.active }); }}>Edit</button>
+                    <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => removeModel(model.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PermissionsTab() {
+  const toast = useToast();
+  const [roles, setRoles] = useState([]);
+  const [definitions, setDefinitions] = useState([]);
+  const [permissionMap, setPermissionMap] = useState({});
+  const [savingRole, setSavingRole] = useState('');
+
+  async function load() {
+    try {
+      const res = await getRolePermissions();
+      setRoles(res.data.roles || []);
+      setDefinitions(res.data.definitions || []);
+      setPermissionMap(res.data.permissions || {});
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load permissions');
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const categories = Array.from(new Set(definitions.map(item => item.category)));
+
+  async function saveRole(role) {
+    setSavingRole(role);
+    try {
+      const enabled = Object.entries(permissionMap[role] || {}).filter(([, allowed]) => allowed).map(([key]) => key);
+      await updateRolePermissions(role, enabled);
+      toast.success(`${role} permissions updated`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save permissions');
+    } finally {
+      setSavingRole('');
+    }
+  }
+
+  return (
+    <div className="card">
+      <div style={{ fontWeight: 700, marginBottom: 16 }}>Role Permissions</div>
+      <div style={{ display: 'grid', gap: 16 }}>
+        {roles.map(role => (
+          <div key={role} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, textTransform: 'capitalize' }}>{role}</div>
+              <button className="btn btn-primary btn-sm" onClick={() => saveRole(role)} disabled={savingRole === role}>
+                {savingRole === role ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {categories.map(category => (
+              <div key={`${role}-${category}`} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 6 }}>{category}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+                  {definitions.filter(item => item.category === category).map(item => (
+                    <label key={`${role}-${item.key}`} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!permissionMap?.[role]?.[item.key]}
+                        onChange={e => setPermissionMap(prev => ({
+                          ...prev,
+                          [role]: { ...(prev[role] || {}), [item.key]: e.target.checked },
+                        }))}
+                      />
+                      {item.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Service Bulletin metadata ────────────────────────────────────────────────
+
+const BULLETIN_CATEGORIES = [
+  {
+    value: 'mandatory',
+    label: 'Mandatory',
+    badge: 'badge-danger',
+    description: 'Unsafe condition exists. Compliance is required.',
+  },
+  {
+    value: 'obligatory',
+    label: 'Obligatory',
+    badge: 'badge-warning',
+    description: 'No unsafe condition, but compliance with the measures is required.',
+  },
+  {
+    value: 'recommended',
+    label: 'Recommended',
+    badge: 'badge-info',
+    description: 'No unsafe condition, but implementing the measures is advisable.',
+  },
+  {
+    value: 'optional',
+    label: 'Optional',
+    badge: 'badge-ghost',
+    description: 'No unsafe condition; improves the affected part.',
+  },
+];
+
+const EMPTY_BULLETIN_FORM = {
+  title: '',
+  reason: '',
+  category: 'optional',
+  what_to_do: '',
+  affected_option_ids: [],
+};
+
+function bulletinCategoryMeta(value) {
+  return BULLETIN_CATEGORIES.find(c => c.value === value) || BULLETIN_CATEGORIES[3];
+}
+
+function BulletinsTab() {
+  const toast = useToast();
+  const [bulletins,    setBulletins]    = useState([]);
+  const [configOptions, setConfigOptions] = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [form,         setForm]         = useState(EMPTY_BULLETIN_FORM);
+  const [editingId,    setEditingId]    = useState(null);   // bulletin id being edited
+  const [saving,       setSaving]       = useState(false);
+  const [showForm,     setShowForm]     = useState(false);
+
+  // "View affected aircraft" drawer
+  const [selected,    setSelected]    = useState(null);     // bulletin object
+  const [affected,    setAffected]    = useState([]);
+  const [resolveForm, setResolveForm] = useState({});       // { [aircraft_id]: {...} }
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [bRes, oRes] = await Promise.all([getFleetBulletins(), getFleetConfigOptions()]);
+      setBulletins(bRes.data || []);
+      setConfigOptions(oRes.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load bulletins');
+    } finally { setLoading(false); }
+  }
+
+  // Group config options by category for the multi-select
+  const optionsByCategory = configOptions.reduce((acc, o) => {
+    if (!acc[o.category]) acc[o.category] = [];
+    acc[o.category].push(o);
+    return acc;
+  }, {});
+
+  function openCreate() {
+    setForm(EMPTY_BULLETIN_FORM);
+    setEditingId(null);
+    setShowForm(true);
+  }
+
+  async function openEdit(bulletin) {
+    try {
+      const res = await getFleetBulletin(bulletin.id);
+      const data = res.data;
+      setForm({
+        title:               data.title || '',
+        reason:              data.reason || '',
+        category:            data.category || 'optional',
+        what_to_do:          data.what_to_do || '',
+        affected_option_ids: data.affected_option_ids || [],
+      });
+      setEditingId(bulletin.id);
+      setShowForm(true);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load bulletin');
+    }
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(EMPTY_BULLETIN_FORM);
+  }
+
+  function toggleOption(optId) {
+    setForm(f => {
+      const set = new Set(f.affected_option_ids);
+      if (set.has(optId)) set.delete(optId); else set.add(optId);
+      return { ...f, affected_option_ids: [...set] };
+    });
+  }
+
+  async function save(e) {
+    if (e?.preventDefault) e.preventDefault();
+    if (!form.title.trim()) { toast.error('Title is required'); return; }
+    setSaving(true);
+    try {
+      if (editingId) {
+        await updateFleetBulletin(editingId, form);
+        toast.success('Bulletin updated');
+      } else {
+        const res = await createFleetBulletin(form);
+        toast.success(`Bulletin created — ${res.data.matched_aircraft_count || 0} aircraft affected`);
+      }
+      closeForm();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save bulletin');
+    } finally { setSaving(false); }
+  }
+
+  async function toggleStatus(bulletin) {
+    try {
+      await updateFleetBulletin(bulletin.id, { status: bulletin.status === 'open' ? 'closed' : 'open' });
+      toast.success(`Bulletin ${bulletin.status === 'open' ? 'closed' : 'reopened'}`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update status');
+    }
+  }
+
+  async function remove(bulletin) {
+    if (!window.confirm(`Delete bulletin "${bulletin.title}"? This also clears all aircraft sign-offs for it.`)) return;
+    try {
+      await deleteFleetBulletin(bulletin.id);
+      toast.success('Bulletin deleted');
+      if (selected?.id === bulletin.id) setSelected(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete');
+    }
+  }
+
+  async function openAffected(bulletin) {
+    setSelected(bulletin);
+    try {
+      const res = await getFleetBulletinAircraft(bulletin.id);
+      setAffected(res.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load affected aircraft');
+    }
+  }
+
+  async function resolveAircraft(row) {
+    const data = resolveForm[row.aircraft_id] || {};
+    try {
+      await resolveFleetBulletinAircraft(selected.id, row.aircraft_id, data);
+      toast.success('Aircraft signed off');
+      openAffected(selected);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to sign off aircraft');
+    }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+          {bulletins.length} bulletin{bulletins.length === 1 ? '' : 's'}.
+          Affected aircraft are determined by the configuration options each aircraft has selected.
+        </div>
+        {!showForm && (
+          <button className="btn btn-primary" onClick={openCreate}>+ New Bulletin</button>
+        )}
+      </div>
+
+      {/* Create / Edit form */}
+      {showForm && (
+        <div className="card">
+          <div style={{ fontWeight: 700, marginBottom: 14 }}>
+            {editingId ? 'Edit Bulletin' : 'Create Bulletin'}
+          </div>
+          <form onSubmit={save}>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14, marginBottom: 12 }}>
+              <div className="form-group">
+                <label>Title *</label>
+                <input
+                  autoFocus
+                  value={form.title}
+                  onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. SB-2025-12 Rotax fuel-pump replacement"
+                />
+              </div>
+              <div className="form-group">
+                <label>Category *</label>
+                <select
+                  value={form.category}
+                  onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                >
+                  {BULLETIN_CATEGORIES.map(c => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+                <span style={{ display: 'block', marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                  {bulletinCategoryMeta(form.category).description}
+                </span>
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label>Reason</label>
+              <textarea
+                rows={3}
+                value={form.reason}
+                onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
+                placeholder="Why this bulletin was issued — e.g. observed wear pattern, regulatory directive…"
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 16 }}>
+              <label>What to do</label>
+              <textarea
+                rows={4}
+                value={form.what_to_do}
+                onChange={e => setForm(f => ({ ...f, what_to_do: e.target.value }))}
+                placeholder="Step-by-step instructions for compliance"
+              />
+            </div>
+
+            {/* Affected configuration options */}
+            <div className="form-group" style={{ marginBottom: 16 }}>
+              <label>Affected Configuration Options</label>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+                Pick the engine / propeller / avionics / component options this bulletin applies to.
+                Any aircraft that has at least one of these in its configuration will be marked as affected.
+              </p>
+
+              {configOptions.length === 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
+                  No configuration options defined. Add some in <strong>Configuration Config</strong> first.
+                </p>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  {Object.entries(optionsByCategory).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => (
+                    <div key={cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>
+                        {cat}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {opts.map(o => (
+                          <label key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={form.affected_option_ids.includes(o.id)}
+                              onChange={() => toggleOption(o.id)}
+                              style={{ width: 14, height: 14, flexShrink: 0 }}
+                            />
+                            <span>{o.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {form.affected_option_ids.length === 0 && (
+                <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8, marginBottom: 0 }}>
+                  ⚠ With no options selected, no aircraft will be marked as affected.
+                </p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-ghost" onClick={closeForm}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? 'Saving…' : (editingId ? '💾 Save Changes' : '+ Create Bulletin')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Bulletins list */}
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700 }}>
+          All Bulletins
+        </div>
+        {loading ? (
+          <div style={{ padding: 24, color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : bulletins.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>
+            No bulletins yet. Click <strong>+ New Bulletin</strong> to create one.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th style={{ width: 130 }}>Category</th>
+                  <th>Affected Options</th>
+                  <th style={{ width: 90 }}>Status</th>
+                  <th style={{ width: 100 }}>Aircraft</th>
+                  <th style={{ width: 200 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {bulletins.map(b => {
+                  const meta = bulletinCategoryMeta(b.category);
+                  return (
+                    <tr key={b.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{b.title}</div>
+                        {b.reason && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {b.reason}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${meta.badge}`} style={{ fontSize: 10 }}>{meta.label}</span>
+                      </td>
+                      <td>
+                        {(b.affected_options || []).length === 0 ? (
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            {b.serial_prefix
+                              ? `Legacy: serial prefix "${b.serial_prefix}"`
+                              : 'No options linked'}
+                          </span>
+                        ) : (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {b.affected_options.slice(0, 4).map(o => (
+                              <span key={o.id} className="badge badge-ghost" style={{ fontSize: 10 }} title={`${o.category} — ${o.label}`}>
+                                {o.label}
+                              </span>
+                            ))}
+                            {b.affected_options.length > 4 && (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>+{b.affected_options.length - 4}</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${b.status === 'open' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 10 }}>
+                          {b.status}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: 12, fontFamily: 'monospace' }}>
+                        {b.open_aircraft_count}/{b.total_aircraft_count}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openAffected(b)}>View</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(b)}>Edit</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => toggleStatus(b)}>
+                            {b.status === 'open' ? 'Close' : 'Reopen'}
+                          </button>
+                          <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => remove(b)}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Affected aircraft drawer */}
+      {selected && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontWeight: 700 }}>{selected.title} — Affected Aircraft</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                {affected.length} aircraft. Sign off each one as the work is completed.
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>Close</button>
+          </div>
+
+          {affected.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
+              No aircraft currently have a configuration that matches this bulletin.
+            </p>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Aircraft</th><th>Status</th><th>Resolution</th></tr>
+                </thead>
+                <tbody>
+                  {affected.map(row => (
+                    <tr key={`${row.aircraft_id}-${row.serial_id || 'none'}`}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{row.bw_serial}</div>
+                        {row.registration && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.registration}</div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${row.status === 'open' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 10 }}>
+                          {row.status}
+                        </span>
+                      </td>
+                      <td style={{ minWidth: 320 }}>
+                        {row.status === 'resolved' ? (
+                          <div style={{ fontSize: 12 }}>
+                            <div style={{ color: 'var(--text-secondary)' }}>
+                              {row.resolution_notes || 'Signed off'}
+                            </div>
+                            {row.signed_off_by && (
+                              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
+                                by {row.signed_off_by}
+                                {row.labor_hours != null && ` · ${row.labor_hours} h`}
+                                {row.resolved_at && ` · ${new Date(row.resolved_at).toLocaleDateString()}`}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ display: 'grid', gap: 6 }}>
+                            <input
+                              placeholder="Resolution notes"
+                              value={resolveForm[row.aircraft_id]?.resolution_notes || ''}
+                              onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), resolution_notes: e.target.value } }))}
+                            />
+                            <input
+                              placeholder="Extra work completed (optional)"
+                              value={resolveForm[row.aircraft_id]?.resolved_extra_work || ''}
+                              onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), resolved_extra_work: e.target.value } }))}
+                            />
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <input
+                                placeholder="Hours"
+                                value={resolveForm[row.aircraft_id]?.labor_hours || ''}
+                                onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), labor_hours: e.target.value } }))}
+                                style={{ width: 80 }}
+                              />
+                              <input
+                                placeholder="Signed off by"
+                                value={resolveForm[row.aircraft_id]?.signed_off_by || ''}
+                                onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), signed_off_by: e.target.value } }))}
+                                style={{ flex: 1 }}
+                              />
+                              <button className="btn btn-primary btn-sm" onClick={() => resolveAircraft(row)}>Sign Off</button>
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SVC_CATEGORIES = ['Engine', 'Airframe'];
-const EMPTY_SVC = { category: 'Engine', title: '', interval_hours: '', interval_months: '', description: '', sort_order: 0 };
+const EMPTY_SVC = { category: 'Engine', title: '', interval_hours: '', interval_months: '', description: '', sort_order: 0, is_one_time: false };
 
 function ServiceTemplatesSection() {
   const toast = useToast();
@@ -1172,9 +1828,23 @@ function ServiceTemplatesSection() {
               <button type="submit" className="btn btn-primary" disabled={savingS}>{savingS ? '…' : '+ Add'}</button>
             </div>
           </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
+          <div className="form-group" style={{ marginBottom: 12 }}>
             <label>Description / Notes</label>
             <input value={addSvc.description} onChange={e => setAddSvc(s => ({ ...s, description: e.target.value }))} placeholder="Optional procedure notes" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!addSvc.is_one_time}
+                onChange={e => setAddSvc(s => ({ ...s, is_one_time: e.target.checked }))}
+                style={{ width: 15, height: 15 }}
+              />
+              <span style={{ fontWeight: 500, fontSize: 13 }}>One-time milestone</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                — fires once at TSN within ±10h of the interval (e.g. 25h, 200h, 600h). Supersedes the recurring 100h check when active.
+              </span>
+            </label>
           </div>
         </form>
       </div>
@@ -1192,6 +1862,7 @@ function ServiceTemplatesSection() {
                   <th>Title</th>
                   <th style={{ width: 90 }}>Interval h</th>
                   <th style={{ width: 90 }}>Interval mo</th>
+                  <th style={{ width: 90 }}>One-time</th>
                   <th style={{ width: 90 }}></th>
                 </tr>
               </thead>
@@ -1220,6 +1891,18 @@ function ServiceTemplatesSection() {
                         ? <input type="number" value={editSvc.interval_months} onChange={e => setEditSvc(s => ({ ...s, interval_months: e.target.value }))} style={{ fontSize: 13, width: 70 }} />
                         : <span style={{ fontSize: 13, fontFamily: 'monospace' }}>{t.interval_months ?? '—'}</span>}
                     </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {editSvcId === t.id
+                        ? <input
+                            type="checkbox"
+                            checked={!!editSvc.is_one_time}
+                            onChange={e => setEditSvc(s => ({ ...s, is_one_time: e.target.checked }))}
+                            style={{ width: 16, height: 16 }}
+                          />
+                        : (t.is_one_time
+                            ? <span className="badge badge-info" style={{ fontSize: 10 }}>once</span>
+                            : <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>)}
+                    </td>
                     <td>
                       {editSvcId === t.id
                         ? <div style={{ display: 'flex', gap: 4 }}>
@@ -1227,7 +1910,7 @@ function ServiceTemplatesSection() {
                             <button className="btn btn-ghost btn-sm" onClick={() => setEditSvcId(null)}>✕</button>
                           </div>
                         : <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditSvcId(t.id); setEditSvc({ category: t.category, title: t.title, interval_hours: t.interval_hours ?? '', interval_months: t.interval_months ?? '', description: t.description ?? '' }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditSvcId(t.id); setEditSvc({ category: t.category, title: t.title, interval_hours: t.interval_hours ?? '', interval_months: t.interval_months ?? '', description: t.description ?? '', is_one_time: !!t.is_one_time }); }}>✎</button>
                             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDeleteSvc(t.id)}>✕</button>
                           </div>}
                     </td>

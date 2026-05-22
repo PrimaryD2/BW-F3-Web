@@ -152,55 +152,27 @@ router.get('/throughput', async (req, res) => {
 // GET /api/statistics/dashboard — quick summary for dashboard widgets
 router.get('/dashboard', async (req, res) => {
   try {
-    // Active airplanes in production
-    const activePlanes = await query(
-      `SELECT COUNT(*) AS active_airplanes FROM airplanes WHERE status = 'in_progress'`
-    );
-
-    // Today's time logged
-    const todayTime = await query(
-      `SELECT COALESCE(SUM(duration_minutes),0) AS today_minutes
-       FROM time_logs WHERE DATE(started_at) = CURDATE() AND ended_at IS NOT NULL`
-    );
-
-    // Open NCR count
-    const openNcrCount = await query(
-      `SELECT COUNT(*) AS open_ncr_count FROM nonconformity_reports WHERE status = 'open'`
-    );
-
-    // Today's loss time
-    const todayLoss = await query(
-      `SELECT COALESCE(SUM(duration_minutes),0) AS today_loss_minutes
-       FROM loss_logs WHERE DATE(logged_at) = CURDATE()`
-    );
-
-    // Loss reasons this week
-    const weekLoss = await query(
-      `SELECT reason, COALESCE(SUM(duration_minutes),0) AS total_minutes, COUNT(*) AS count
-       FROM loss_logs
-       WHERE YEARWEEK(logged_at, 1) = YEARWEEK(CURDATE(), 1)
-       GROUP BY reason ORDER BY total_minutes DESC`
-    );
-
-    // Recent open NCRs
-    const openNcrs = await query(
-      `SELECT ncr.id, ncr.severity, ncr.description, ncr.created_at,
-              a.serial_number, s.name AS station_name
-       FROM nonconformity_reports ncr
-       JOIN airplanes a ON ncr.airplane_id = a.id
-       JOIN stations s ON ncr.station_id = s.id
-       WHERE ncr.status = 'open'
-       ORDER BY FIELD(ncr.severity,'high','medium','low'), ncr.created_at DESC
-       LIMIT 10`
-    );
+    const [summaryRows, countries] = await Promise.all([
+      query(
+        `SELECT
+           COUNT(*) AS total_aircraft_produced,
+           SUM(CASE WHEN delivery_date IS NOT NULL OR build_status = 'delivered' THEN 1 ELSE 0 END) AS delivered_aircraft,
+           SUM(CASE WHEN build_status IN ('in_service', 'delivered') THEN 1 ELSE 0 END) AS active_in_service_aircraft
+         FROM fleet_aircraft`
+      ),
+      query(
+        `SELECT COALESCE(country_name, 'Unknown') AS country, COUNT(*) AS aircraft_count
+         FROM fleet_aircraft
+         GROUP BY COALESCE(country_name, 'Unknown')
+         ORDER BY aircraft_count DESC, country ASC`
+      ),
+    ]);
 
     res.json({
-      active_airplanes:   Number(activePlanes[0].active_airplanes) || 0,
-      today_minutes:      Number(todayTime[0].today_minutes) || 0,
-      open_ncr_count:     Number(openNcrCount[0].open_ncr_count) || 0,
-      today_loss_minutes: Number(todayLoss[0].today_loss_minutes) || 0,
-      week_loss:          normalizeBigInt(weekLoss),
-      open_ncrs:          openNcrs,
+      total_aircraft_produced: Number(summaryRows[0]?.total_aircraft_produced) || 0,
+      delivered_aircraft: Number(summaryRows[0]?.delivered_aircraft) || 0,
+      active_in_service_aircraft: Number(summaryRows[0]?.active_in_service_aircraft) || 0,
+      aircraft_by_country: normalizeBigInt(countries),
     });
   } catch (err) {
     console.error(err);

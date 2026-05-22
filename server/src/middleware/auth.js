@@ -47,4 +47,9 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { generateToken, authenticateToken, requireRole, JWT_SECRET };
+module.exports = {
+  generateToken,
+  authenticateToken,
+  requireRole,
+  JWT_SECRET,
+};
