@@ -414,6 +414,54 @@ CREATE TABLE IF NOT EXISTS fleet_planned_maintenance_items (
   FOREIGN KEY (template_id) REFERENCES fleet_service_templates(id) ON DELETE SET NULL,
   FOREIGN KEY (signed_off_record_id) REFERENCES fleet_service_records(id) ON DELETE SET NULL
 );
+
+-- ─── CRM: Customers ──────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS customers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  full_name VARCHAR(255) NOT NULL,
+  company_name VARCHAR(255) NULL,
+  country VARCHAR(100) NULL,
+  city VARCHAR(100) NULL,
+  email VARCHAR(255) NULL,
+  phone VARCHAR(100) NULL,
+  preferred_language VARCHAR(50) NULL,
+  source ENUM('website','email','phone','instagram','facebook','aero','dealer','existing_customer','referral','other') DEFAULT 'other',
+  interested_aircraft VARCHAR(255) NULL,
+  customer_type ENUM('new_buyer','existing_owner','dealer','service_customer','other') DEFAULT 'new_buyer',
+  status ENUM('new','contacted','waiting_reply','active_discussion','quote_sent','test_flight_planned','problem_support','closed_won','closed_lost','future_prospect') DEFAULT 'new',
+  priority ENUM('low','medium','high','urgent') DEFAULT 'medium',
+  assigned_employee_id INT NULL,
+  general_notes TEXT NULL,
+  archived BOOLEAN NOT NULL DEFAULT FALSE,
+  last_contact_date DATETIME NULL,
+  next_followup_date DATE NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (assigned_employee_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ─── CRM: Customer communication logs ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS customer_logs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_id INT NOT NULL,
+  date_time DATETIME NOT NULL,
+  employee_id INT NULL,
+  employee_name VARCHAR(255) NULL,
+  contact_type ENUM('email','phone_call','whatsapp','sms','instagram','facebook','meeting','event','internal_note','other') DEFAULT 'other',
+  category ENUM('sales','support','service','problem','delivery','warranty','general_question','other') DEFAULT 'other',
+  title VARCHAR(255) NOT NULL,
+  detailed_notes TEXT NULL,
+  customer_question TEXT NULL,
+  blackwing_answer TEXT NULL,
+  follow_up_needed BOOLEAN NOT NULL DEFAULT FALSE,
+  follow_up_date DATE NULL,
+  follow_up_responsible VARCHAR(255) NULL,
+  entry_status ENUM('open','waiting_customer','waiting_blackwing','solved','closed') DEFAULT 'open',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+  FOREIGN KEY (employee_id) REFERENCES users(id) ON DELETE SET NULL
+);
 `;
 
 // Additive column additions — safe to re-run on an existing database.

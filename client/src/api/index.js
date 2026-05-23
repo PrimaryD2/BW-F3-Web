@@ -163,6 +163,19 @@ export const updateFleetPaperwork = (id, pid, d) => api.put(`/fleet/${id}/paperw
 export const deleteFleetPaperwork = (id, pid)    => api.delete(`/fleet/${id}/paperwork/${pid}`);
 export const paperworkDownloadUrl = (pid)        => `/api/fleet/paperwork/${pid}/download`;
 
+// ─── CRM / Customers ─────────────────────────────────────────────────────────
+export const getCustomers         = (p)        => api.get('/customers', { params: p });
+export const getCustomerFollowups = ()         => api.get('/customers/followups');
+export const getCustomer          = (id)       => api.get(`/customers/${id}`);
+export const createCustomer       = (d)        => api.post('/customers', d);
+export const updateCustomer       = (id, d)    => api.put(`/customers/${id}`, d);
+export const archiveCustomer      = (id)       => api.delete(`/customers/${id}`);
+
+export const getCustomerLogs      = (id, p)    => api.get(`/customers/${id}/logs`, { params: p });
+export const createCustomerLog    = (id, d)    => api.post(`/customers/${id}/logs`, d);
+export const updateCustomerLog    = (id, lid, d) => api.put(`/customers/${id}/logs/${lid}`, d);
+export const deleteCustomerLog    = (id, lid)  => api.delete(`/customers/${id}/logs/${lid}`);
+
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 export const pdfTaskSheet    = (airplaneId, stationId) => `/api/pdf/task-sheet/${airplaneId}/${stationId}`;
 export const pdfNcr          = (id) => `/api/pdf/ncr/${id}`;

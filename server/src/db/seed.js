@@ -97,6 +97,58 @@ async function seed() {
       }
     }
 
+    // 4. Seed example CRM customer (John Smith)
+    console.log('Seeding example customer...');
+    const existing = await conn.query(
+      "SELECT id FROM customers WHERE full_name = 'John Smith' AND email = 'john.smith@example.com' LIMIT 1"
+    );
+    if (!existing || existing.length === 0) {
+      const adminRows = await conn.query("SELECT id FROM users WHERE username = 'admin' LIMIT 1");
+      const adminId = adminRows?.[0]?.id || null;
+
+      const custResult = await conn.query(`
+        INSERT INTO customers
+          (full_name, company_name, country, city, email, phone,
+           preferred_language, source, interested_aircraft, customer_type,
+           status, priority, assigned_employee_id, general_notes,
+           last_contact_date, next_followup_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'John Smith', null, 'Germany', 'Munich',
+        'john.smith@example.com', '+49 89 555 0123',
+        'English', 'aero', 'Blackwing 635RG', 'new_buyer',
+        'active_discussion', 'high', adminId,
+        'Met at AERO Friedrichshafen. Very interested in the 635RG with full Garmin glass cockpit package.',
+        '2026-05-20 14:30:00', '2026-05-28',
+      ]);
+      const custId = Number(custResult.insertId);
+
+      await conn.query(`
+        INSERT INTO customer_logs
+          (customer_id, date_time, employee_name, contact_type, category, title,
+           detailed_notes, customer_question, blackwing_answer,
+           follow_up_needed, follow_up_date, follow_up_responsible, entry_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        custId,
+        '2026-05-20 14:30:00',
+        'Administrator',
+        'phone_call',
+        'sales',
+        'Phone call — delivery time and avionics options',
+        'Called John to follow up after AERO. He is seriously considering the 635RG and wants to know the expected delivery date and available avionics configurations.',
+        'What is the current lead time for a new 635RG? Can we get the full Garmin G3X Touch glass cockpit with GFC 500 autopilot? What is included in the standard package vs. optional?',
+        'Explained that current production slot is approximately 18 months from contract signing. Confirmed full Garmin G3X Touch cockpit is available as standard on new builds. GFC 500 autopilot is optional but strongly recommended. Sent him the current configurator PDF and price list by email.',
+        true,
+        '2026-05-28',
+        'Administrator',
+        'open',
+      ]);
+      console.log('   Example customer John Smith created (id=' + custId + ')');
+    } else {
+      console.log('   Example customer already exists, skipping.');
+    }
+
     console.log('✅ Seed completed successfully.');
     console.log('   Default admin credentials: username=admin  password=admin123');
     console.log('   ⚠  You will be required to change the password on first login.');

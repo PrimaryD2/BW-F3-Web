@@ -13,6 +13,7 @@ const adminRoutes     = require('./routes/admin');
 const statisticsRoutes = require('./routes/statistics');
 const pdfRoutes       = require('./routes/pdf');
 const fleetRoutes     = require('./routes/fleet');
+const customerRoutes  = require('./routes/customers');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +39,7 @@ app.use('/api/admin',       adminRoutes);
 app.use('/api/statistics',  statisticsRoutes);
 app.use('/api/pdf',         pdfRoutes);
 app.use('/api/fleet',       fleetRoutes);
+app.use('/api/customers',   customerRoutes);
 
 // Serve uploaded fleet images
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
