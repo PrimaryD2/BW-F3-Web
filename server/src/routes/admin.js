@@ -500,8 +500,8 @@ router.post('/bulletins', async (req, res) => {
   }
   try {
     const result = await query(
-      `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by, serial_prefix)
+       VALUES (?, ?, ?, ?, ?, '')`,
       [
         String(title).trim(),
         category,

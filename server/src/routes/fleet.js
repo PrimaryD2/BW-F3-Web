@@ -430,7 +430,7 @@ router.get('/gallery', async (_req, res) => {
     const rows = await query(`
       SELECT
         fa.id, fa.bw_serial, fa.aircraft_number, fa.model,
-        fa.registration, fa.country_code, fa.country_name, fa.build_status,
+        fa.registration, fa.country_code, fa.country_name, fa.customer_name, fa.build_status,
         (
           SELECT GROUP_CONCAT(DISTINCT fco.label ORDER BY fco.sort_order ASC, fco.label ASC SEPARATOR ', ')
           FROM fleet_aircraft_config fac

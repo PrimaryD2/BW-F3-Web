@@ -1,4 +1,15 @@
-# ── Stage 1: Production server ─────────────────────────────────────────────────
+# ── Stage 1: Build React client ─────────────────────────────────────────────────
+FROM node:20-alpine AS client-builder
+
+WORKDIR /app/client
+
+COPY client/package.json ./
+RUN npm install
+
+COPY client/ ./
+RUN npm run build
+
+# ── Stage 2: Production server ─────────────────────────────────────────────────
 FROM node:20-alpine AS production
 
 WORKDIR /app/server
@@ -11,8 +22,8 @@ RUN npm install --omit=dev
 COPY server/ ./
 COPY shared/ /app/shared/
 
-# Copy the pre-built React client dist
-COPY client/dist /app/client/dist
+# Copy the freshly built React client dist from stage 1
+COPY --from=client-builder /app/client/dist /app/client/dist
 
 RUN chmod +x /app/server/docker-entrypoint.sh
 

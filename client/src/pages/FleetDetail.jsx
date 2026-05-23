@@ -14,6 +14,7 @@ import {
   getFleetEventTypes,
   uploadFleetPaperwork, updateFleetPaperwork, deleteFleetPaperwork, paperworkDownloadUrl,
   getUsers,
+  resolveFleetBulletinAircraft,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -341,12 +342,29 @@ function MaintenanceTab({
     return acc;
   }, {});
 
-  // Group templates by category
+  // Group templates by category, sorted by interval_hours ascending within each group
   const grouped = serviceTemplates.reduce((acc, t) => {
     if (!acc[t.category]) acc[t.category] = [];
     acc[t.category].push(t);
     return acc;
   }, {});
+  // Sort templates within each category: lowest interval hours first, nulls last
+  for (const cat of Object.keys(grouped)) {
+    grouped[cat].sort((a, b) => {
+      const aH = a.interval_hours != null ? Number(a.interval_hours) : Infinity;
+      const bH = b.interval_hours != null ? Number(b.interval_hours) : Infinity;
+      return aH - bH;
+    });
+  }
+  // Category display order: Engine first, then Airframe, then others alphabetically
+  const CATEGORY_ORDER = ['Engine', 'Airframe'];
+  const sortedCategories = Object.keys(grouped).sort((a, b) => {
+    const ai = CATEGORY_ORDER.indexOf(a), bi = CATEGORY_ORDER.indexOf(b);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.localeCompare(b);
+  });
 
   const openPlannedItems = plannedMaintenance.filter(item => item.status === 'planned');
   const completedPlannedItems = plannedMaintenance.filter(item => item.status === 'completed');
@@ -879,7 +897,9 @@ function MaintenanceTab({
       </div>
 
       <div style={{ marginTop: 24 }}>
-        {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, templates]) => (
+        {sortedCategories.map(cat => {
+          const templates = grouped[cat];
+          return (
           <div key={cat} style={{ marginBottom: 28 }}>
             <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 10 }}>
               {cat}
@@ -1048,7 +1068,8 @@ function MaintenanceTab({
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </>
   );
@@ -1106,6 +1127,12 @@ export default function FleetDetail() {
   const [partReplacements, setPartReplacements] = useState([]);
   const [bulletins, setBulletins] = useState([]);
   const [models, setModels] = useState([]);
+
+  // Bulletin sign-off state
+  const [bulletinActingId,   setBulletinActingId]   = useState(null);
+  const [bulletinActingMode, setBulletinActingMode] = useState('fixed'); // 'fixed' | 'not_affected'
+  const [bulletinSignoffForm, setBulletinSignoffForm] = useState({ resolution_notes: '', labor_hours: '', signed_off_by: '' });
+  const [bulletinSaving, setBulletinSaving] = useState(false);
 
   // Configuration options (from admin panel)
   const [configOptions,   setConfigOptions]   = useState([]);
@@ -1478,6 +1505,35 @@ export default function FleetDetail() {
       await deleteFleetEvent(id, eid);
       setEvents(ev => ev.filter(x => x.id !== eid));
     } catch { toast.error('Delete failed'); }
+  }
+
+  // ─── Bulletin sign-off ─────────────────────────────────────────────────────
+
+  async function handleBulletinResolve(bulletinItem) {
+    setBulletinSaving(true);
+    try {
+      const payload = {
+        resolution_notes: bulletinSignoffForm.resolution_notes || (bulletinActingMode === 'not_affected' ? 'Not affected' : ''),
+        labor_hours: bulletinSignoffForm.labor_hours || null,
+        signed_off_by: bulletinActingMode === 'not_affected'
+          ? (bulletinSignoffForm.signed_off_by || 'N/A')
+          : (bulletinSignoffForm.signed_off_by || ''),
+        resolved_extra_work: bulletinActingMode === 'not_affected' ? 'not_affected' : null,
+      };
+      await resolveFleetBulletinAircraft(bulletinItem.id, aircraft.id, payload);
+      setBulletins(prev => prev.map(b =>
+        b.id === bulletinItem.id
+          ? { ...b, aircraft_status: 'resolved', signed_off_by: payload.signed_off_by, resolved_at: new Date().toISOString() }
+          : b
+      ));
+      setBulletinActingId(null);
+      setBulletinSignoffForm({ resolution_notes: '', labor_hours: '', signed_off_by: '' });
+      toast.success(bulletinActingMode === 'not_affected' ? 'Marked as not affected' : 'Bulletin signed off as fixed');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to sign off bulletin');
+    } finally {
+      setBulletinSaving(false);
+    }
   }
 
   // ─── Images ────────────────────────────────────────────────────────────────
@@ -2157,149 +2213,255 @@ export default function FleetDetail() {
           );
         })()}
 
-        {bulletins.length > 0 && (() => {
-          const BULLETIN_BADGE = {
-            mandatory:   { label: 'Mandatory',   cls: 'badge-danger'  },
-            obligatory:  { label: 'Obligatory',  cls: 'badge-warning' },
-            recommended: { label: 'Recommended', cls: 'badge-info'    },
-            optional:    { label: 'Optional',    cls: 'badge-ghost'   },
-          };
-          return (
-            <div className="card" style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 700, marginBottom: 12 }}>Bulletins Affecting This Aircraft</div>
-              <div style={{ display: 'grid', gap: 10 }}>
-                {bulletins.map(item => {
-                  const meta = BULLETIN_BADGE[item.category] || BULLETIN_BADGE.optional;
-                  return (
-                    <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-                            <span className={`badge ${meta.cls}`} style={{ fontSize: 10 }}>{meta.label}</span>
-                            <span style={{ fontWeight: 700 }}>{item.title}</span>
-                          </div>
-                          {item.reason && (
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                              <strong>Reason:</strong> {item.reason}
-                            </div>
-                          )}
-                          {item.what_to_do && (
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                              <strong>What to do:</strong> {item.what_to_do}
-                            </div>
-                          )}
-                          {item.aircraft_status === 'resolved' && item.signed_off_by && (
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                              Signed off by {item.signed_off_by}
-                              {item.resolved_at && ` on ${new Date(item.resolved_at).toLocaleDateString()}`}
-                            </div>
-                          )}
-                        </div>
-                        <span className={`badge ${item.aircraft_status === 'open' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 10, flexShrink: 0 }}>
-                          {item.aircraft_status}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()}
         </>
       )}
 
       {/* ── EVENTS ───────────────────────────────────────────────────────────── */}
-      {tab === 'Events' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
-          {/* Event list */}
-          <div>
-            {events.length === 0 ? (
-              <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                No events logged yet.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {events.map(ev => (
-                  <div key={ev.id} className="card" style={{ padding: '14px 16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          {(() => { const evType = eventTypes.find(t => t.label === ev.event_type); return (
-                          <span className={`badge ${evType?.color || EVENT_TYPE_BADGE[ev.event_type] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
-                            {ev.event_type}
-                          </span>
-                          ); })()}
-                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(ev.event_date)}</span>
-                          {ev.hours_at_event != null && (
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{ev.hours_at_event}h TSN</span>
+      {tab === 'Events' && (() => {
+        const BULLETIN_BADGE = {
+          mandatory:   { label: 'Mandatory',   cls: 'badge-danger'  },
+          obligatory:  { label: 'Obligatory',  cls: 'badge-warning' },
+          recommended: { label: 'Recommended', cls: 'badge-info'    },
+          optional:    { label: 'Optional',    cls: 'badge-ghost'   },
+        };
+        const openBulletins = bulletins.filter(b => b.aircraft_status === 'open');
+        const resolvedBulletins = bulletins.filter(b => b.aircraft_status === 'resolved');
+
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
+            {/* Left column: bulletins + event list */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+              {/* ── Service Bulletins ────────────────────────────────────── */}
+              {bulletins.length > 0 && (
+                <div className="card">
+                  <div className="card-header">
+                    <span className="card-title">Service Bulletins</span>
+                    {openBulletins.length > 0 && (
+                      <span className="badge badge-danger" style={{ fontSize: 10 }}>{openBulletins.length} open</span>
+                    )}
+                  </div>
+
+                  {/* Open bulletins */}
+                  {openBulletins.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: resolvedBulletins.length > 0 ? 16 : 0 }}>
+                      {openBulletins.map(item => {
+                        const meta = BULLETIN_BADGE[item.category] || BULLETIN_BADGE.optional;
+                        const isActing = bulletinActingId === item.id;
+                        return (
+                          <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                                  <span className={`badge ${meta.cls}`} style={{ fontSize: 10 }}>{meta.label}</span>
+                                  <span style={{ fontWeight: 700 }}>{item.title}</span>
+                                </div>
+                                {item.reason && (
+                                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                                    <strong>Reason:</strong> {item.reason}
+                                  </div>
+                                )}
+                                {item.what_to_do && (
+                                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                                    <strong>What to do:</strong> {item.what_to_do}
+                                  </div>
+                                )}
+                              </div>
+                              {isSupervisor && (
+                                <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    style={{ color: 'var(--text-secondary)', fontSize: 11 }}
+                                    onClick={() => {
+                                      if (isActing && bulletinActingMode === 'not_affected') { setBulletinActingId(null); }
+                                      else { setBulletinActingId(item.id); setBulletinActingMode('not_affected'); setBulletinSignoffForm({ resolution_notes: '', labor_hours: '', signed_off_by: '' }); }
+                                    }}
+                                  >
+                                    Not Affected
+                                  </button>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    style={{ fontSize: 11 }}
+                                    onClick={() => {
+                                      if (isActing && bulletinActingMode === 'fixed') { setBulletinActingId(null); }
+                                      else { setBulletinActingId(item.id); setBulletinActingMode('fixed'); setBulletinSignoffForm({ resolution_notes: '', labor_hours: '', signed_off_by: '' }); }
+                                    }}
+                                  >
+                                    ✓ Sign Off Fixed
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Inline sign-off / not-affected form */}
+                            {isActing && (
+                              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {bulletinActingMode === 'fixed' ? (
+                                  <>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Sign Off as Fixed</div>
+                                    <FormField label="Resolution notes">
+                                      <textarea
+                                        rows={2}
+                                        value={bulletinSignoffForm.resolution_notes || ''}
+                                        onChange={e => setBulletinSignoffForm(f => ({ ...f, resolution_notes: e.target.value }))}
+                                        placeholder="What was done to comply with this bulletin?"
+                                      />
+                                    </FormField>
+                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                      <FormField label="Labor hours" half>
+                                        <input type="number" step="0.1" min="0" value={bulletinSignoffForm.labor_hours || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, labor_hours: e.target.value }))} placeholder="0.0" />
+                                      </FormField>
+                                      <FormField label="Signed off by" half>
+                                        <input value={bulletinSignoffForm.signed_off_by || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, signed_off_by: e.target.value }))} placeholder="Name" />
+                                      </FormField>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Mark as Not Affected</div>
+                                    <FormField label="Notes (optional)">
+                                      <input value={bulletinSignoffForm.resolution_notes || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, resolution_notes: e.target.value }))} placeholder="Why this aircraft is not affected" />
+                                    </FormField>
+                                  </>
+                                )}
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <button className="btn btn-ghost btn-sm" onClick={() => setBulletinActingId(null)}>Cancel</button>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    disabled={bulletinSaving}
+                                    onClick={() => handleBulletinResolve(item)}
+                                  >
+                                    {bulletinSaving ? 'Saving…' : 'Confirm'}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Resolved bulletins — collapsed summary */}
+                  {resolvedBulletins.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>
+                        Resolved ({resolvedBulletins.length})
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {resolvedBulletins.map(item => {
+                          const meta = BULLETIN_BADGE[item.category] || BULLETIN_BADGE.optional;
+                          return (
+                            <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderRadius: 8, background: 'var(--bg-hover)', gap: 10 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                                <span className={`badge ${meta.cls}`} style={{ fontSize: 10, flexShrink: 0 }}>{meta.label}</span>
+                                <span style={{ fontSize: 13, fontWeight: 600 }}>{item.title}</span>
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <span className="badge badge-success" style={{ fontSize: 10 }}>Resolved</span>
+                                {item.signed_off_by && (
+                                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                                    by {item.signed_off_by}{item.resolved_at && ` · ${new Date(item.resolved_at).toLocaleDateString()}`}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Event list ──────────────────────────────────────────── */}
+              {events.length === 0 ? (
+                <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                  No events logged yet.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {events.map(ev => (
+                    <div key={ev.id} className="card" style={{ padding: '14px 16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            {(() => { const evType = eventTypes.find(t => t.label === ev.event_type); return (
+                            <span className={`badge ${evType?.color || EVENT_TYPE_BADGE[ev.event_type] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
+                              {ev.event_type}
+                            </span>
+                            ); })()}
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(ev.event_date)}</span>
+                            {ev.hours_at_event != null && (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{ev.hours_at_event}h TSN</span>
+                            )}
+                          </div>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{ev.title}</div>
+                          {ev.description && (
+                            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{ev.description}</p>
+                          )}
+                          {ev.logged_by_name && (
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>Logged by {ev.logged_by_name}</div>
                           )}
                         </div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>{ev.title}</div>
-                        {ev.description && (
-                          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{ev.description}</p>
+                        {canEdit && (
+                          <button className="btn btn-ghost btn-sm" onClick={() => handleEditEvent(ev)}>
+                            Edit
+                          </button>
                         )}
-                        {ev.logged_by_name && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>Logged by {ev.logged_by_name}</div>
+                        {canEdit && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ color: 'var(--danger)', flexShrink: 0 }}
+                            onClick={() => handleDeleteEvent(ev.id)}
+                          >
+                            ✕
+                          </button>
                         )}
                       </div>
-                      {canEdit && (
-                        <button className="btn btn-ghost btn-sm" onClick={() => handleEditEvent(ev)}>
-                          Edit
-                        </button>
-                      )}
-                      {canEdit && (
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          style={{ color: 'var(--danger)', flexShrink: 0 }}
-                          onClick={() => handleDeleteEvent(ev.id)}
-                        >
-                          ✕
-                        </button>
-                      )}
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Add event form */}
-          <div className="card" style={{ position: 'sticky', top: 20 }}>
-            <div style={{ fontWeight: 700, marginBottom: 14 }}>{editingEventId ? 'Edit Event' : 'Log New Event'}</div>
-            <form onSubmit={handleAddEvent}>
-              <FormField label="Date *">
-                <input type="date" value={newEvent.event_date} onChange={e => setNewEvent(n => ({ ...n, event_date: e.target.value }))} required />
-              </FormField>
-              <FormField label="Type">
-                <select value={newEvent.event_type} onChange={e => setNewEvent(n => ({ ...n, event_type: e.target.value }))}>
-                  {eventTypes.length > 0
-                    ? eventTypes.map(t => <option key={t.id} value={t.label}>{t.label}</option>)
-                    : EVENT_TYPES.map(t => <option key={t} value={t}>{EVENT_TYPE_LABEL[t]}</option>)
-                  }
-                </select>
-              </FormField>
-              <FormField label="Title *">
-                <input value={newEvent.title} onChange={e => setNewEvent(n => ({ ...n, title: e.target.value }))} placeholder="Short title" required />
-              </FormField>
-              <FormField label="Hours at Event (TSN)">
-                <input type="number" step="0.1" min="0" value={newEvent.hours_at_event} onChange={e => setNewEvent(n => ({ ...n, hours_at_event: e.target.value }))} placeholder="Optional" />
-              </FormField>
-              <FormField label="Description">
-                <textarea value={newEvent.description} onChange={e => setNewEvent(n => ({ ...n, description: e.target.value }))} rows={3} placeholder="Details…" style={{ resize: 'vertical' }} />
-              </FormField>
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={eventSaving}>
-                {eventSaving ? 'Saving…' : '+ Log Event'}
-              </button>
-              {editingEventId && (
-                <button type="button" className="btn btn-ghost" style={{ width: '100%', marginTop: 8 }} onClick={handleCancelEventEdit}>
-                  Cancel Edit
-                </button>
+                  ))}
+                </div>
               )}
-            </form>
+            </div>
+
+            {/* Add event form */}
+            <div className="card" style={{ position: 'sticky', top: 20 }}>
+              <div style={{ fontWeight: 700, marginBottom: 14 }}>{editingEventId ? 'Edit Event' : 'Log New Event'}</div>
+              <form onSubmit={handleAddEvent}>
+                <FormField label="Date *">
+                  <input type="date" value={newEvent.event_date} onChange={e => setNewEvent(n => ({ ...n, event_date: e.target.value }))} required />
+                </FormField>
+                <FormField label="Type">
+                  <select value={newEvent.event_type} onChange={e => setNewEvent(n => ({ ...n, event_type: e.target.value }))}>
+                    {eventTypes.length > 0
+                      ? eventTypes.map(t => <option key={t.id} value={t.label}>{t.label}</option>)
+                      : EVENT_TYPES.map(t => <option key={t} value={t}>{EVENT_TYPE_LABEL[t]}</option>)
+                    }
+                  </select>
+                </FormField>
+                <FormField label="Title *">
+                  <input value={newEvent.title} onChange={e => setNewEvent(n => ({ ...n, title: e.target.value }))} placeholder="Short title" required />
+                </FormField>
+                <FormField label="Hours at Event (TSN)">
+                  <input type="number" step="0.1" min="0" value={newEvent.hours_at_event} onChange={e => setNewEvent(n => ({ ...n, hours_at_event: e.target.value }))} placeholder="Optional" />
+                </FormField>
+                <FormField label="Description">
+                  <textarea value={newEvent.description} onChange={e => setNewEvent(n => ({ ...n, description: e.target.value }))} rows={3} placeholder="Details…" style={{ resize: 'vertical' }} />
+                </FormField>
+                <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={eventSaving}>
+                  {eventSaving ? 'Saving…' : '+ Log Event'}
+                </button>
+                {editingEventId && (
+                  <button type="button" className="btn btn-ghost" style={{ width: '100%', marginTop: 8 }} onClick={handleCancelEventEdit}>
+                    Cancel Edit
+                  </button>
+                )}
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── GALLERY ──────────────────────────────────────────────────────────── */}
       {tab === 'Gallery' && (
