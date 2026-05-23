@@ -151,7 +151,7 @@ export default function AircraftGallery() {
                 style={{
                   textAlign: 'left',
                   border: '1px solid var(--border)',
-                  borderRadius: 14,
+                  borderRadius: 12,
                   overflow: 'hidden',
                   background: 'var(--bg-secondary)',
                   padding: 0,
@@ -160,8 +160,8 @@ export default function AircraftGallery() {
                   flexDirection: 'column',
                 }}
               >
-                {/* Image with overlay info */}
-                <div style={{ position: 'relative', aspectRatio: '4 / 3', background: '#111' }}>
+                {/* ── Image area — fixed height, status pill only ── */}
+                <div style={{ position: 'relative', height: 200, background: 'var(--bg-tertiary, #1a1a1a)', flexShrink: 0 }}>
                   {item.cover_image ? (
                     <img
                       src={`/uploads/fleet/${item.cover_image}`}
@@ -170,62 +170,62 @@ export default function AircraftGallery() {
                     />
                   ) : (
                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#444" strokeWidth="1.5">
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.92 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.83 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 8.91a16 16 0 0 0 5.61 5.61l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+                      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1.2">
+                        <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21 4 19 4c-1.5 0-2.5.5-4 2L10 8.5 3.5 8 2 9.5l6 2.5-2 3.5-2.5.5L5 17l3-1 2.5 6 1.5-1.5V19l4.5-4 2.8 5.2z"/>
                       </svg>
                     </div>
                   )}
 
-                  {/* Status pill — top right */}
+                  {/* Status pill — top right corner of image only */}
                   <div style={{
                     position: 'absolute', top: 10, right: 10,
-                    background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+                    background: 'rgba(0,0,0,0.60)', backdropFilter: 'blur(4px)',
                     borderRadius: 20, padding: '3px 10px',
                     display: 'flex', alignItems: 'center', gap: 5,
                   }}>
                     <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, flexShrink: 0, display: 'inline-block' }} />
                     <span style={{ fontSize: 11, fontWeight: 600, color: '#fff', letterSpacing: '0.03em' }}>{statusLabel}</span>
                   </div>
-
-                  {/* Bottom gradient overlay with serial + registration */}
-                  <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)',
-                    padding: '28px 14px 12px',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: '-0.3px', lineHeight: 1.1 }}>
-                          {item.bw_serial}
-                        </div>
-                        {item.registration && (
-                          <div style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.85)', marginTop: 2 }}>
-                            {item.registration}
-                          </div>
-                        )}
-                      </div>
-                      {item.country_code && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                          <FlagIcon code={item.country_code} />
-                          {item.country_name && (
-                            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.country_name}</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 </div>
 
-                {/* Card footer — model, engine config, customer */}
-                <div style={{ padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    {item.model && (
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{item.model}</span>
-                    )}
-                    {item.engine_configuration && (
-                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 500 }}>{item.engine_configuration}</span>
+                {/* ── Card body — all text info below the photo ── */}
+                <div style={{ padding: '12px 14px 14px', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+
+                  {/* Row 1: serial + registration */}
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.3px', lineHeight: 1 }}>
+                      {item.bw_serial}
+                    </span>
+                    {item.registration && (
+                      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', flexShrink: 0 }}>
+                        {item.registration}
+                      </span>
                     )}
                   </div>
+
+                  {/* Row 2: model + engine config */}
+                  {(item.model || item.engine_configuration) && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      {item.model && (
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.model}</span>
+                      )}
+                      {item.engine_configuration && (
+                        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 500 }}>{item.engine_configuration}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Row 3: flag + country name */}
+                  {item.country_code && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <FlagIcon code={item.country_code} />
+                      {item.country_name && (
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>{item.country_name}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Row 4: customer name */}
                   {item.customer_name && (
                     <div style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {item.customer_name}

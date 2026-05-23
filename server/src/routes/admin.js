@@ -453,7 +453,12 @@ router.get('/bulletins', async (_req, res) => {
       if (!optsByBulletin[r.bulletin_id]) optsByBulletin[r.bulletin_id] = [];
       optsByBulletin[r.bulletin_id].push({ id: r.id, label: r.label, category: r.category });
     }
-    res.json(rows.map(b => ({ ...b, affected_options: optsByBulletin[b.id] || [] })));
+    res.json(rows.map(b => ({
+      ...b,
+      open_aircraft_count:  Number(b.open_aircraft_count  ?? 0),
+      total_aircraft_count: Number(b.total_aircraft_count ?? 0),
+      affected_options: optsByBulletin[b.id] || [],
+    })));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
