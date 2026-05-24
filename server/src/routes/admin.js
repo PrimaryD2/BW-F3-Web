@@ -343,12 +343,12 @@ router.get('/models', async (_req, res) => {
 
 // POST /api/admin/models
 router.post('/models', async (req, res) => {
-  const { name, code, active = true, sort_order = 0 } = req.body || {};
+  const { name, code, active = true, sort_order = 0, show_in_configurator = false, base_price } = req.body || {};
   if (!String(name || '').trim()) return res.status(400).json({ error: 'Model name required' });
   try {
     const result = await query(
-      'INSERT INTO fleet_models (name, code, active, sort_order) VALUES (?, ?, ?, ?)',
-      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0]
+      'INSERT INTO fleet_models (name, code, active, sort_order, show_in_configurator, base_price) VALUES (?, ?, ?, ?, ?, ?)',
+      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [result.insertId]);
     res.status(201).json(rows[0]);
@@ -361,11 +361,11 @@ router.post('/models', async (req, res) => {
 
 // PUT /api/admin/models/:id
 router.put('/models/:id', async (req, res) => {
-  const { name, code, active, sort_order } = req.body || {};
+  const { name, code, active, sort_order, show_in_configurator, base_price } = req.body || {};
   try {
     await query(
-      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ? WHERE id = ?',
-      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, req.params.id]
+      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ?, show_in_configurator = ?, base_price = ? WHERE id = ?',
+      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, req.params.id]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [req.params.id]);
     res.json(rows[0]);

@@ -57,6 +57,11 @@ services:
       DB_USER:  ${DB_USER:-f3user}
       DB_PASS:  ${DB_PASS:-f3password}
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-secret-before-deploying}
+      SMTP_FROM: ${SMTP_FROM:-Blackwing Aircraft <noreply@blackwing.aero>}
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      COMPANY_NAME: ${COMPANY_NAME:-Blackwing Aircraft}
+      COMPANY_WEBSITE: ${COMPANY_WEBSITE:-https://blackwing.aero}
+      COMPANY_EMAIL: ${COMPANY_EMAIL:-info@blackwing.aero}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 15s

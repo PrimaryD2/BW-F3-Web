@@ -415,6 +415,18 @@ CREATE TABLE IF NOT EXISTS fleet_planned_maintenance_items (
   FOREIGN KEY (signed_off_record_id) REFERENCES fleet_service_records(id) ON DELETE SET NULL
 );
 
+-- ─── Maintenance item photos ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fleet_maintenance_photos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  item_id INT NOT NULL,
+  filename VARCHAR(255) NOT NULL,
+  caption VARCHAR(300) NULL,
+  uploaded_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (item_id) REFERENCES fleet_planned_maintenance_items(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
 -- ─── CRM: Customers ──────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS customers (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -438,6 +450,33 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (assigned_employee_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ─── CRM: Aircraft configuration quotes (buying process) ─────────────────────
+CREATE TABLE IF NOT EXISTS customer_quotes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_id INT NOT NULL,
+  model_id INT NULL,
+  model_name VARCHAR(120) NULL,
+  title VARCHAR(200) NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'draft',
+  notes TEXT NULL,
+  created_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+  FOREIGN KEY (model_id) REFERENCES fleet_models(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS customer_quote_options (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  quote_id INT NOT NULL,
+  option_id INT NULL,
+  option_label VARCHAR(200) NOT NULL,
+  option_category VARCHAR(100) NOT NULL,
+  FOREIGN KEY (quote_id) REFERENCES customer_quotes(id) ON DELETE CASCADE,
+  FOREIGN KEY (option_id) REFERENCES fleet_config_options(id) ON DELETE SET NULL
 );
 
 -- ─── CRM: Customer communication logs ────────────────────────────────────────
@@ -519,6 +558,22 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_planned_maintenance MODIFY COLUMN template_id INT NULL`,
   `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS planned_arrival_date DATE NULL`,
   `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
+  // Aircraft models — configurator visibility + base price
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS show_in_configurator BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS base_price DECIMAL(12,2) NULL`,
+  // Config options — standard (pre-selected) flag + price + configurator visibility
+  `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS is_standard BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS price DECIMAL(10,2) NULL`,
+  // Default TRUE so all existing options stay visible; admins can hide legacy/retired ones
+  `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS show_in_configurator BOOLEAN NOT NULL DEFAULT TRUE`,
+  // Customer quotes — VAT rate
+  `ALTER TABLE customer_quotes ADD COLUMN IF NOT EXISTS vat_rate DECIMAL(5,2) NOT NULL DEFAULT 20.00`,
+  // Customer quote options — price snapshot captured at time of saving
+  `ALTER TABLE customer_quote_options ADD COLUMN IF NOT EXISTS option_price DECIMAL(10,2) NULL`,
+  // Planned maintenance — link to CRM customer
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS customer_id INT NULL`,
+  // Planned maintenance items — individual completion date
+  `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS completed_date DATE NULL`,
   // Service templates — one-time milestone flag (25h initial, 200h, 600h, etc.)
   // These fire ONCE at a specific TSN value (±10h tolerance) instead of every
   // N hours, and supersede the recurring 100h-or-12mo check when active.

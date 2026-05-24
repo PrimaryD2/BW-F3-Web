@@ -176,6 +176,21 @@ export const createCustomerLog    = (id, d)    => api.post(`/customers/${id}/log
 export const updateCustomerLog    = (id, lid, d) => api.put(`/customers/${id}/logs/${lid}`, d);
 export const deleteCustomerLog    = (id, lid)  => api.delete(`/customers/${id}/logs/${lid}`);
 
+export const getCustomerBookings  = (id)       => api.get(`/customers/${id}/bookings`);
+export const createCustomerBooking = (id, d)   => api.post(`/customers/${id}/bookings`, d);
+
+export const getCustomerQuotes    = (id)           => api.get(`/customers/${id}/quotes`);
+export const createCustomerQuote  = (id, d)        => api.post(`/customers/${id}/quotes`, d);
+export const updateCustomerQuote  = (id, qid, d)   => api.put(`/customers/${id}/quotes/${qid}`, d);
+export const deleteCustomerQuote  = (id, qid)      => api.delete(`/customers/${id}/quotes/${qid}`);
+export const sendCustomerQuoteEmail = (id, qid, d) => api.post(`/customers/${id}/quotes/${qid}/send-email`, d);
+
+export const signOffMaintenanceItem = (itemId, d) => api.put(`/fleet/planned-maintenance/items/${itemId}/signoff`, d);
+export const uploadMaintenanceItemPhoto = (itemId, formData) =>
+  api.post(`/fleet/planned-maintenance/items/${itemId}/photos`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const deleteMaintenanceItemPhoto = (itemId, photoId) =>
+  api.delete(`/fleet/planned-maintenance/items/${itemId}/photos/${photoId}`);
+
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 export const pdfTaskSheet    = (airplaneId, stationId) => `/api/pdf/task-sheet/${airplaneId}/${stationId}`;
 export const pdfNcr          = (id) => `/api/pdf/ncr/${id}`;

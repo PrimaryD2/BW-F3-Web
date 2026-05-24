@@ -740,7 +740,7 @@ function FleetConfigTab() {
   const [loading, setLoading]   = useState(true);
   const [editId,  setEditId]    = useState(null);   // option id being edited
   const [editForm, setEditForm] = useState({});
-  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0 });
+  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, price: '', show_in_configurator: true });
   const [saving,   setSaving]   = useState(false);
 
   useEffect(() => { loadOptions(); }, []);
@@ -764,9 +764,9 @@ function FleetConfigTab() {
     if (!cat || !addForm.label.trim()) { toast.error('Category and label are required'); return; }
     setSaving(true);
     try {
-      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order });
+      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order, is_standard: addForm.is_standard, price: addForm.price !== '' ? Number(addForm.price) : null, show_in_configurator: addForm.show_in_configurator });
       setOptions(o => [...o, r.data].sort((a,b) => a.category.localeCompare(b.category) || a.sort_order - b.sort_order || a.label.localeCompare(b.label)));
-      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0 });
+      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, price: '', show_in_configurator: true });
       toast.success('Option added');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to add');
@@ -775,13 +775,13 @@ function FleetConfigTab() {
 
   function startEdit(o) {
     setEditId(o.id);
-    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order });
+    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order, is_standard: !!o.is_standard, price: o.price != null ? String(o.price) : '', show_in_configurator: o.show_in_configurator !== false });
   }
 
   async function handleUpdate(oid) {
     setSaving(true);
     try {
-      const r = await updateFleetConfigOption(oid, editForm);
+      const r = await updateFleetConfigOption(oid, { ...editForm, price: editForm.price !== '' ? Number(editForm.price) : null });
       setOptions(o => o.map(x => x.id === oid ? r.data : x));
       setEditId(null);
       toast.success('Option updated');
@@ -810,10 +810,13 @@ function FleetConfigTab() {
 
       {/* Add new option */}
       <div className="card" style={{ marginBottom: 24 }}>
-        <div style={{ fontWeight: 700, marginBottom: 14 }}>Add Configuration Option</div>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Add Configuration Option</div>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 14 }}>
+          Mark <strong>Standard</strong> to pre-select &amp; lock it in the configurator. Uncheck <strong>Visible in Configurator</strong> to hide retired or internal options. Add a price to enable quote totals.
+        </p>
         <form onSubmit={handleAdd}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <div className="form-group" style={{ flex: '0 0 180px' }}>
+            <div className="form-group" style={{ flex: '0 0 160px', margin: 0 }}>
               <label>Category</label>
               <select value={addForm.category} onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))}>
                 <option value="">— Select —</option>
@@ -822,34 +825,33 @@ function FleetConfigTab() {
               </select>
             </div>
             {addForm.category === '__custom__' && (
-              <div className="form-group" style={{ flex: '0 0 160px' }}>
+              <div className="form-group" style={{ flex: '0 0 140px', margin: 0 }}>
                 <label>Custom Category</label>
-                <input
-                  value={addForm.custom_category}
-                  onChange={e => setAddForm(f => ({ ...f, custom_category: e.target.value }))}
-                  placeholder="e.g. Fuel System"
-                />
+                <input value={addForm.custom_category} onChange={e => setAddForm(f => ({ ...f, custom_category: e.target.value }))} placeholder="e.g. Fuel System" />
               </div>
             )}
-            <div className="form-group" style={{ flex: '1 1 200px' }}>
+            <div className="form-group" style={{ flex: '1 1 180px', margin: 0 }}>
               <label>Option Label</label>
-              <input
-                value={addForm.label}
-                onChange={e => setAddForm(f => ({ ...f, label: e.target.value }))}
-                placeholder="e.g. Rotax 912 ULS 100hp"
-              />
+              <input value={addForm.label} onChange={e => setAddForm(f => ({ ...f, label: e.target.value }))} placeholder="e.g. Rotax 912 ULS 100hp" />
             </div>
-            <div className="form-group" style={{ flex: '0 0 90px' }}>
+            <div className="form-group" style={{ flex: '0 0 100px', margin: 0 }}>
+              <label>Price (€)</label>
+              <input type="number" min="0" step="100" value={addForm.price} onChange={e => setAddForm(f => ({ ...f, price: e.target.value }))} placeholder="0" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 70px', margin: 0 }}>
               <label>Order</label>
-              <input
-                type="number"
-                value={addForm.sort_order}
-                onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))}
-              />
+              <input type="number" value={addForm.sort_order} onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))} />
             </div>
-            <div className="form-group" style={{ flex: '0 0 auto' }}>
-              <label>&nbsp;</label>
-              <button type="submit" className="btn btn-primary" disabled={saving}>
+            <div className="form-group" style={{ flex: '0 0 auto', margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={addForm.is_standard} onChange={e => setAddForm(f => ({ ...f, is_standard: e.target.checked }))} />
+                Standard
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={addForm.show_in_configurator} onChange={e => setAddForm(f => ({ ...f, show_in_configurator: e.target.checked }))} />
+                ✈ Visible in Configurator
+              </label>
+              <button type="submit" className="btn btn-primary btn-sm" disabled={saving} style={{ marginTop: 2 }}>
                 {saving ? 'Adding…' : '+ Add'}
               </button>
             </div>
@@ -876,33 +878,59 @@ function FleetConfigTab() {
                   <thead>
                     <tr>
                       <th>Label</th>
-                      <th style={{ width: 70 }}>Order</th>
-                      <th style={{ width: 100 }}></th>
+                      <th style={{ width: 100 }}>Price</th>
+                      <th style={{ width: 80 }}>Standard</th>
+                      <th style={{ width: 110 }}>Configurator</th>
+                      <th style={{ width: 60 }}>Order</th>
+                      <th style={{ width: 90 }}></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {opts.map(o => (
-                      <tr key={o.id}>
+                    {opts.map(o => {
+                      const isHidden = o.show_in_configurator === false || o.show_in_configurator === 0;
+                      return (
+                      <tr key={o.id} style={{ background: o.is_standard ? 'rgba(34,197,94,0.04)' : isHidden ? 'rgba(148,163,184,0.05)' : undefined, opacity: isHidden ? 0.65 : 1 }}>
                         <td>
                           {editId === o.id ? (
-                            <input
-                              autoFocus
-                              value={editForm.label}
-                              onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))}
-                              style={{ fontSize: 13 }}
-                            />
+                            <input autoFocus value={editForm.label} onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))} style={{ fontSize: 13 }} />
                           ) : (
-                            <span style={{ fontSize: 13 }}>{o.label}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 13 }}>{o.label}</span>
+                              {o.is_standard && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 20, background: '#22c55e22', color: '#22c55e', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Standard</span>}
+                            </div>
                           )}
                         </td>
                         <td>
                           {editId === o.id ? (
-                            <input
-                              type="number"
-                              value={editForm.sort_order}
-                              onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))}
-                              style={{ fontSize: 13, width: 60 }}
-                            />
+                            <input type="number" min="0" step="100" value={editForm.price} onChange={e => setEditForm(f => ({ ...f, price: e.target.value }))} style={{ fontSize: 13, width: 90 }} placeholder="0" />
+                          ) : (
+                            <span style={{ fontSize: 13, fontWeight: o.price != null ? 600 : 400, color: o.price != null ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                              {o.price != null ? `€${Number(o.price).toLocaleString()}` : '—'}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <input type="checkbox" checked={editForm.is_standard} onChange={e => setEditForm(f => ({ ...f, is_standard: e.target.checked }))} />
+                          ) : (
+                            <span>{o.is_standard ? '✅' : ''}</span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
+                              <input type="checkbox" checked={editForm.show_in_configurator !== false} onChange={e => setEditForm(f => ({ ...f, show_in_configurator: e.target.checked }))} />
+                              Visible
+                            </label>
+                          ) : (
+                            isHidden
+                              ? <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 20, background: '#94a3b822', color: '#94a3b8', border: '1px solid #94a3b844', fontWeight: 600 }}>Hidden</span>
+                              : <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 20, background: '#3b82f622', color: '#3b82f6', border: '1px solid #3b82f644', fontWeight: 600 }}>✈ Visible</span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <input type="number" value={editForm.sort_order} onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))} style={{ fontSize: 13, width: 55 }} />
                           ) : (
                             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.sort_order}</span>
                           )}
@@ -921,7 +949,8 @@ function FleetConfigTab() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1082,10 +1111,12 @@ function EventTypesSection() {
   );
 }
 
+const EMPTY_MODEL_FORM = { name: '', code: '', active: true, show_in_configurator: false, base_price: '' };
+
 function ModelsTab() {
   const toast = useToast();
   const [models, setModels] = useState([]);
-  const [form, setForm] = useState({ name: '', code: '', active: true });
+  const [form, setForm] = useState(EMPTY_MODEL_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -1114,7 +1145,7 @@ function ModelsTab() {
         await createFleetModel(form);
         toast.success('Model added');
       }
-      setForm({ name: '', code: '', active: true });
+      setForm(EMPTY_MODEL_FORM);
       setEditingId(null);
       load();
     } catch (err) {
@@ -1122,6 +1153,17 @@ function ModelsTab() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function startEdit(model) {
+    setEditingId(model.id);
+    setForm({
+      name: model.name || '',
+      code: model.code || '',
+      active: !!model.active,
+      show_in_configurator: !!model.show_in_configurator,
+      base_price: model.base_price != null ? String(model.base_price) : '',
+    });
   }
 
   async function removeModel(id) {
@@ -1136,23 +1178,41 @@ function ModelsTab() {
 
   return (
     <div className="card">
-      <div style={{ fontWeight: 700, marginBottom: 16 }}>Aircraft Models</div>
-      <form onSubmit={onSubmit} className="form-row form-row-3" style={{ marginBottom: 18 }}>
-        <div className="form-group">
-          <label>Model Name</label>
-          <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>Aircraft Models</div>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
+        Models marked <strong>Visible in Configurator</strong> appear in the customer buying process. Set a base price for automatic quote totals.
+      </p>
+      <form onSubmit={onSubmit} style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 140px 140px', gap: 12 }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Model Name *</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Blackwing 635RG" required />
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Code</label>
+            <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="Optional short code" />
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Base Price (€)</label>
+            <input type="number" min="0" step="100" value={form.base_price} onChange={e => setForm(f => ({ ...f, base_price: e.target.value }))} placeholder="e.g. 95000" />
+          </div>
+          <div className="form-group" style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label>&nbsp;</label>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', height: 38 }}>
+              <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Update' : 'Add Model'}</button>
+              {editingId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditingId(null); setForm(EMPTY_MODEL_FORM); }}>Cancel</button>}
+            </div>
+          </div>
         </div>
-        <div className="form-group">
-          <label>Code</label>
-          <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="Optional short code" />
-        </div>
-        <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 20 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
             <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
-            Active
+            <span>Active</span>
           </label>
-          <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Update Model' : 'Add Model'}</button>
-          {editingId && <button type="button" className="btn btn-ghost" onClick={() => { setEditingId(null); setForm({ name: '', code: '', active: true }); }}>Cancel</button>}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.show_in_configurator} onChange={e => setForm(f => ({ ...f, show_in_configurator: e.target.checked }))} />
+            <span style={{ fontWeight: 600 }}>✈ Visible in Configurator</span>
+          </label>
         </div>
       </form>
 
@@ -1160,16 +1220,24 @@ function ModelsTab() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Name</th><th>Code</th><th>Status</th><th></th></tr>
+              <tr><th>Name</th><th>Code</th><th>Base Price</th><th>Configurator</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {models.map(model => (
                 <tr key={model.id}>
-                  <td>{model.name}</td>
-                  <td style={{ fontFamily: 'monospace' }}>{model.code || '—'}</td>
+                  <td style={{ fontWeight: 600 }}>{model.name}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{model.code || '—'}</td>
+                  <td style={{ fontSize: 13 }}>
+                    {model.base_price != null ? `€${Number(model.base_price).toLocaleString()}` : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                  </td>
+                  <td>
+                    {model.show_in_configurator
+                      ? <span className="badge badge-success" style={{ fontSize: 10 }}>✈ Visible</span>
+                      : <span className="badge badge-ghost" style={{ fontSize: 10 }}>Hidden</span>}
+                  </td>
                   <td><span className={`badge ${model.active ? 'badge-success' : 'badge-ghost'}`}>{model.active ? 'Active' : 'Inactive'}</span></td>
                   <td style={{ textAlign: 'right' }}>
-                    <button className="btn btn-ghost btn-sm" onClick={() => { setEditingId(model.id); setForm({ name: model.name || '', code: model.code || '', active: !!model.active }); }}>Edit</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => startEdit(model)}>Edit</button>
                     <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => removeModel(model.id)}>Delete</button>
                   </td>
                 </tr>

@@ -8,6 +8,16 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const router = express.Router();
 router.use(authenticateToken);
 
+/** Strip time portion from a date value — keeps MariaDB DATE columns happy
+ *  even when the client accidentally sends a full ISO-8601 timestamp. */
+function toDateOnly(v) {
+  if (v == null || v === '') return null;
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (s.includes('T')) return s.slice(0, 10);
+  return s.slice(0, 10);
+}
+
 router.get('/models', async (_req, res) => {
   try {
     const rows = await query(
@@ -99,14 +109,15 @@ const AIRCRAFT_SELECT = `
 `;
 
 const PLANNED_MAINTENANCE_SELECT = `
-  fpm.id, fpm.aircraft_id, fpm.template_id,
+  fpm.id, fpm.aircraft_id, fpm.template_id, fpm.customer_id,
   fpm.planned_date, COALESCE(fpm.planned_arrival_date, fpm.planned_date) AS planned_arrival_date,
   fpm.assigned_technician_id, fpm.planned_comments,
   fpm.status, fpm.completed_date, fpm.labor_hours, fpm.additional_work,
   fpm.signoff_notes, fpm.signed_off_by, fpm.signed_off_at, fpm.created_at,
   fst.title AS template_title, fst.category,
   fa.bw_serial, fa.registration, fa.country_code,
-  tech.name AS assigned_technician_name
+  tech.name AS assigned_technician_name,
+  cust.full_name AS customer_name
 `;
 
 // ─── Service Templates (registered before /:id to avoid param capture) ──────────
@@ -165,6 +176,7 @@ router.get('/planned-maintenance', async (_req, res) => {
        LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
        JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
        LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
        ORDER BY
          CASE WHEN fpm.status = 'planned' THEN 0 ELSE 1 END,
          CASE WHEN fpm.status = 'planned' THEN COALESCE(fpm.planned_arrival_date, fpm.planned_date) END ASC,
@@ -174,6 +186,8 @@ router.get('/planned-maintenance', async (_req, res) => {
 
     const ids = rows.map(r => r.id);
     let itemsByPm = {};
+    let photosByItem = {};
+
     if (ids.length) {
       const itemRows = await query(
         `SELECT fpmi.*, fst.title AS template_title, fst.category
@@ -187,9 +201,28 @@ router.get('/planned-maintenance', async (_req, res) => {
         if (!itemsByPm[item.planned_id]) itemsByPm[item.planned_id] = [];
         itemsByPm[item.planned_id].push(item);
       }
+
+      const itemIds = itemRows.map(i => i.id);
+      if (itemIds.length) {
+        const photoRows = await query(
+          `SELECT fmp.*, u.name AS uploaded_by_name
+           FROM fleet_maintenance_photos fmp
+           LEFT JOIN users u ON u.id = fmp.uploaded_by
+           WHERE fmp.item_id IN (${itemIds.map(() => '?').join(',')})
+           ORDER BY fmp.created_at ASC`,
+          itemIds
+        );
+        for (const p of photoRows) {
+          if (!photosByItem[p.item_id]) photosByItem[p.item_id] = [];
+          photosByItem[p.item_id].push(p);
+        }
+      }
     }
 
-    res.json(rows.map(r => normPlannedMaintenance({ ...r, items: itemsByPm[r.id] || [] })));
+    res.json(rows.map(r => normPlannedMaintenance({
+      ...r,
+      items: (itemsByPm[r.id] || []).map(it => ({ ...it, photos: photosByItem[it.id] || [] })),
+    })));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -477,12 +510,12 @@ router.get('/config-options', async (_req, res) => {
 
 // POST /api/fleet/config-options
 router.post('/config-options', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { category, label, sort_order = 0 } = req.body;
+  const { category, label, sort_order = 0, is_standard = false, price, show_in_configurator = true } = req.body;
   if (!category || !label) return res.status(400).json({ error: 'category and label are required' });
   try {
     const r = await query(
-      'INSERT INTO fleet_config_options (category, label, sort_order) VALUES (?,?,?)',
-      [category.trim(), label.trim(), sort_order]
+      'INSERT INTO fleet_config_options (category, label, sort_order, is_standard, price, show_in_configurator) VALUES (?,?,?,?,?,?)',
+      [category.trim(), label.trim(), sort_order, is_standard ? 1 : 0, price != null && price !== '' ? Number(price) : null, show_in_configurator ? 1 : 0]
     );
     const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [r.insertId]);
     res.status(201).json(rows[0]);
@@ -494,11 +527,11 @@ router.post('/config-options', requireRole('admin', 'supervisor'), async (req, r
 
 // PUT /api/fleet/config-options/:oid
 router.put('/config-options/:oid', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { category, label, sort_order } = req.body;
+  const { category, label, sort_order, is_standard, price, show_in_configurator } = req.body;
   try {
     await query(
-      'UPDATE fleet_config_options SET category=?, label=?, sort_order=? WHERE id=?',
-      [category?.trim(), label?.trim(), sort_order ?? 0, req.params.oid]
+      'UPDATE fleet_config_options SET category=?, label=?, sort_order=?, is_standard=?, price=?, show_in_configurator=? WHERE id=?',
+      [category?.trim(), label?.trim(), sort_order ?? 0, is_standard ? 1 : 0, price != null && price !== '' ? Number(price) : null, show_in_configurator ? 1 : 0, req.params.oid]
     );
     const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [req.params.oid]);
     res.json(rows[0]);
@@ -638,6 +671,7 @@ router.get('/:id', async (req, res) => {
          LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
          JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
          LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+         LEFT JOIN customers cust ON cust.id = fpm.customer_id
          WHERE fpm.aircraft_id = ?
          ORDER BY
            CASE WHEN fpm.status = 'planned' THEN 0 ELSE 1 END,
@@ -780,7 +814,7 @@ router.post('/:id/services', async (req, res) => {
   try {
     const r = await query(
       'INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)',
-      [req.params.id, template_id, completed_date, hours_at_completion || null, signed_by.trim(), notes || null, req.user.id]
+      [req.params.id, template_id, toDateOnly(completed_date), hours_at_completion || null, signed_by.trim(), notes || null, req.user.id]
     );
     const rows = await query(
       `SELECT fsr.*, u.name AS logged_by_name FROM fleet_service_records fsr
@@ -793,7 +827,7 @@ router.post('/:id/services', async (req, res) => {
 
 // POST /api/fleet/:id/planned-maintenance
 router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { planned_arrival_date, assigned_technician_id, planned_comments, items = [] } = req.body;
+  const { planned_arrival_date, assigned_technician_id, planned_comments, items = [], customer_id } = req.body;
 
   if (!planned_arrival_date) {
     return res.status(400).json({ error: 'planned_arrival_date is required' });
@@ -807,9 +841,9 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
 
     const result = await query(
       `INSERT INTO fleet_planned_maintenance
-       (aircraft_id, template_id, planned_date, planned_arrival_date, assigned_technician_id, planned_comments, planned_by)
-       VALUES (?,?,?,?,?,?,?)`,
-      [req.params.id, primaryTemplateId, planned_arrival_date, planned_arrival_date,
+       (aircraft_id, customer_id, template_id, planned_date, planned_arrival_date, assigned_technician_id, planned_comments, planned_by)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [req.params.id, customer_id || null, primaryTemplateId, planned_arrival_date, planned_arrival_date,
        assigned_technician_id || null, planned_comments || null, req.user.id]
     );
 
@@ -828,6 +862,7 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
        LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
        JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
        LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
        WHERE fpm.id = ?`,
       [plannedId]
     );
@@ -842,6 +877,104 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
     res.status(201).json(normPlannedMaintenance({ ...rows[0], items: itemRows }));
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Per-item sign-off ────────────────────────────────────────────────────────
+// PUT /api/fleet/planned-maintenance/items/:itemId/signoff
+router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { signed_by, completed_date, notes } = req.body;
+  if (!completed_date) return res.status(400).json({ error: 'completed_date is required' });
+  const safeDate = toDateOnly(completed_date);
+
+  try {
+    const itemRows = await query(
+      `SELECT fpmi.*, fpm.aircraft_id, fpm.id AS planned_id
+       FROM fleet_planned_maintenance_items fpmi
+       JOIN fleet_planned_maintenance fpm ON fpm.id = fpmi.planned_id
+       WHERE fpmi.id = ?`,
+      [req.params.itemId]
+    );
+    const item = itemRows[0];
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+
+    const techName = (signed_by || req.user.name || 'Unknown').trim();
+
+    // Create service record if item has a template
+    let recordId = null;
+    if (item.template_id) {
+      const aircraftRows = await query('SELECT total_hours_tsn FROM fleet_aircraft WHERE id = ?', [item.aircraft_id]);
+      const hrsAtCompletion = aircraftRows[0]?.total_hours_tsn != null ? Number(aircraftRows[0].total_hours_tsn) : null;
+      const sr = await query(
+        `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
+        [item.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, notes || null, req.user.id]
+      );
+      recordId = Number(sr.insertId);
+    }
+
+    await query(
+      `UPDATE fleet_planned_maintenance_items
+       SET signed_off = 1, signed_off_by = ?, signed_off_at = CURRENT_TIMESTAMP,
+           completed_date = ?, notes = ?, signed_off_record_id = ?
+       WHERE id = ?`,
+      [techName, safeDate, notes || null, recordId, req.params.itemId]
+    );
+
+    // Return updated item with photos
+    const updated = await query(
+      `SELECT fpmi.*, fst.title AS template_title, fst.category
+       FROM fleet_planned_maintenance_items fpmi
+       LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       WHERE fpmi.id = ?`,
+      [req.params.itemId]
+    );
+    const photos = await query(
+      `SELECT fmp.*, u.name AS uploaded_by_name FROM fleet_maintenance_photos fmp
+       LEFT JOIN users u ON u.id = fmp.uploaded_by WHERE fmp.item_id = ? ORDER BY fmp.created_at`,
+      [req.params.itemId]
+    );
+    res.json({ ...updated[0], photos });
+  } catch (err) {
+    console.error('PUT /planned-maintenance/items/:itemId/signoff error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/fleet/planned-maintenance/items/:itemId/photos
+router.post('/planned-maintenance/items/:itemId/photos', requireRole('admin', 'supervisor'), upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_maintenance_photos (item_id, filename, caption, uploaded_by) VALUES (?,?,?,?)',
+      [req.params.itemId, req.file.filename, req.body.caption || null, req.user.id]
+    );
+    const rows = await query(
+      `SELECT fmp.*, u.name AS uploaded_by_name FROM fleet_maintenance_photos fmp
+       LEFT JOIN users u ON u.id = fmp.uploaded_by WHERE fmp.id = ?`,
+      [Number(r.insertId)]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error('POST /planned-maintenance/items/:itemId/photos error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/fleet/planned-maintenance/items/:itemId/photos/:photoId
+router.delete('/planned-maintenance/items/:itemId/photos/:photoId', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    const rows = await query(
+      'SELECT filename FROM fleet_maintenance_photos WHERE id = ? AND item_id = ?',
+      [req.params.photoId, req.params.itemId]
+    );
+    if (rows && rows.length > 0) {
+      try { fs.unlinkSync(path.join(UPLOAD_DIR, rows[0].filename)); } catch {}
+      await query('DELETE FROM fleet_maintenance_photos WHERE id = ?', [req.params.photoId]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /planned-maintenance/items/:itemId/photos/:photoId error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -885,6 +1018,7 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
        LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
        JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
        LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
        WHERE fpm.id = ?`,
       [req.params.pid]
     );
@@ -922,6 +1056,7 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
   if (!completed_date) {
     return res.status(400).json({ error: 'completed_date is required' });
   }
+  const safeDate = toDateOnly(completed_date);
 
   try {
     const plannedRows = await query(`SELECT * FROM fleet_planned_maintenance WHERE id = ?`, [req.params.pid]);
@@ -943,7 +1078,7 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
       if (!item.template_id) continue;
       const sr = await query(
         `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
-        [planned.aircraft_id, item.template_id, completed_date, hrsAtCompletion, techName, signoff_notes || planned.planned_comments || null, req.user.id]
+        [planned.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, signoff_notes || planned.planned_comments || null, req.user.id]
       );
       lastRecordId = sr.insertId;
       await query(
@@ -956,7 +1091,7 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
     if (!lastRecordId && planned.template_id) {
       const sr = await query(
         `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
-        [planned.aircraft_id, planned.template_id, completed_date, hrsAtCompletion, techName, signoff_notes || planned.planned_comments || null, req.user.id]
+        [planned.aircraft_id, planned.template_id, safeDate, hrsAtCompletion, techName, signoff_notes || planned.planned_comments || null, req.user.id]
       );
       lastRecordId = sr.insertId;
     }
@@ -967,7 +1102,25 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
            additional_work = ?, signoff_notes = ?, signed_off_by = ?,
            signed_off_at = CURRENT_TIMESTAMP, completed_record_id = ?
        WHERE id = ?`,
-      [completed_date, labor_hours || null, additional_work || null, signoff_notes || null, techName, lastRecordId, req.params.pid]
+      [safeDate, labor_hours || null, additional_work || null, signoff_notes || null, techName, lastRecordId, req.params.pid]
+    );
+
+    // Build event description from items
+    const allItems = itemRows.length
+      ? itemRows.map(it => it.title || it.template_title || '').filter(Boolean).join(', ')
+      : planned.planned_comments || 'Planned maintenance';
+
+    // Log to fleet events so it appears in the aircraft events history
+    await query(
+      `INSERT INTO fleet_events (aircraft_id, event_date, event_type, title, description, logged_by)
+       VALUES (?, ?, 'service', ?, ?, ?)`,
+      [
+        planned.aircraft_id,
+        completed_date,
+        'Maintenance Completed',
+        `Planned maintenance completed by ${techName}${signoff_notes ? ': ' + signoff_notes : ''}`,
+        req.user.id,
+      ]
     );
 
     const rows = await query(
@@ -976,6 +1129,7 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
        LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
        JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
        LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
        WHERE fpm.id = ?`,
       [req.params.pid]
     );
