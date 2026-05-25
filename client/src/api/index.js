@@ -117,8 +117,9 @@ export const getFleetUpcomingServices   = ()         => api.get('/fleet/upcoming
 export const getFleetPlannedMaintenance = ()         => api.get('/fleet/planned-maintenance');
 export const createFleetPlannedMaintenance = (id, d) => api.post(`/fleet/${id}/planned-maintenance`, d);
 export const updateFleetPlannedMaintenance = (pid, d) => api.put(`/fleet/planned-maintenance/${pid}`, d);
-export const deleteFleetPlannedMaintenance = (pid)    => api.delete(`/fleet/planned-maintenance/${pid}`);
+export const deleteFleetPlannedMaintenance  = (pid)    => api.delete(`/fleet/planned-maintenance/${pid}`);
 export const signOffFleetPlannedMaintenance = (pid, d) => api.post(`/fleet/planned-maintenance/${pid}/signoff`, d);
+export const editCompletedFleetPlannedMaintenance = (pid, d) => api.patch(`/fleet/planned-maintenance/${pid}`, d);
 
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);

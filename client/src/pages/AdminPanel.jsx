@@ -1379,15 +1379,17 @@ function BulletinsTab() {
   const [selected,    setSelected]    = useState(null);     // bulletin object
   const [affected,    setAffected]    = useState([]);
   const [resolveForm, setResolveForm] = useState({});       // { [aircraft_id]: {...} }
+  const [users,       setUsers]       = useState([]);
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
     try {
-      const [bRes, oRes] = await Promise.all([getFleetBulletins(), getFleetConfigOptions()]);
+      const [bRes, oRes, uRes] = await Promise.all([getFleetBulletins(), getFleetConfigOptions(), getUsers()]);
       setBulletins(bRes.data || []);
       setConfigOptions(oRes.data || []);
+      setUsers(uRes.data || []);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load bulletins');
     } finally { setLoading(false); }
@@ -1491,6 +1493,14 @@ function BulletinsTab() {
 
   async function resolveAircraft(row) {
     const data = resolveForm[row.aircraft_id] || {};
+    if (!data.resolution_notes?.trim()) {
+      toast.error('Resolution notes are required before signing off');
+      return;
+    }
+    if (!data.signed_off_by) {
+      toast.error('Please select who is signing off');
+      return;
+    }
     try {
       await resolveFleetBulletinAircraft(selected.id, row.aircraft_id, data);
       toast.success('Aircraft signed off');
@@ -1773,17 +1783,24 @@ function BulletinsTab() {
                             />
                             <div style={{ display: 'flex', gap: 6 }}>
                               <input
-                                placeholder="Hours"
+                                placeholder="TSN Hours"
+                                type="number"
+                                step="0.1"
+                                min="0"
                                 value={resolveForm[row.aircraft_id]?.labor_hours || ''}
                                 onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), labor_hours: e.target.value } }))}
-                                style={{ width: 80 }}
+                                style={{ width: 100 }}
                               />
-                              <input
-                                placeholder="Signed off by"
+                              <select
                                 value={resolveForm[row.aircraft_id]?.signed_off_by || ''}
                                 onChange={e => setResolveForm(prev => ({ ...prev, [row.aircraft_id]: { ...(prev[row.aircraft_id] || {}), signed_off_by: e.target.value } }))}
                                 style={{ flex: 1 }}
-                              />
+                              >
+                                <option value="">— Signed off by —</option>
+                                {users.map(u => (
+                                  <option key={u.id} value={u.name}>{u.name}</option>
+                                ))}
+                              </select>
                               <button className="btn btn-primary btn-sm" onClick={() => resolveAircraft(row)}>Sign Off</button>
                             </div>
                           </div>

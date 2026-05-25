@@ -1510,6 +1510,16 @@ export default function FleetDetail() {
   // ─── Bulletin sign-off ─────────────────────────────────────────────────────
 
   async function handleBulletinResolve(bulletinItem) {
+    if (bulletinActingMode === 'fixed') {
+      if (!bulletinSignoffForm.resolution_notes.trim()) {
+        toast.error('Resolution notes are required before signing off');
+        return;
+      }
+      if (!bulletinSignoffForm.signed_off_by) {
+        toast.error('Please select who is signing off');
+        return;
+      }
+    }
     setBulletinSaving(true);
     try {
       const payload = {
@@ -2284,7 +2294,7 @@ export default function FleetDetail() {
                                     style={{ fontSize: 11 }}
                                     onClick={() => {
                                       if (isActing && bulletinActingMode === 'fixed') { setBulletinActingId(null); }
-                                      else { setBulletinActingId(item.id); setBulletinActingMode('fixed'); setBulletinSignoffForm({ resolution_notes: '', labor_hours: '', signed_off_by: '' }); }
+                                      else { setBulletinActingId(item.id); setBulletinActingMode('fixed'); setBulletinSignoffForm({ resolution_notes: '', labor_hours: aircraft?.total_hours_tsn != null ? String(aircraft.total_hours_tsn) : '', signed_off_by: '' }); }
                                     }}
                                   >
                                     ✓ Sign Off Fixed
@@ -2308,11 +2318,16 @@ export default function FleetDetail() {
                                       />
                                     </FormField>
                                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                                      <FormField label="Labor hours" half>
+                                      <FormField label="TSN Hours" half>
                                         <input type="number" step="0.1" min="0" value={bulletinSignoffForm.labor_hours || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, labor_hours: e.target.value }))} placeholder="0.0" />
                                       </FormField>
                                       <FormField label="Signed off by" half>
-                                        <input value={bulletinSignoffForm.signed_off_by || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, signed_off_by: e.target.value }))} placeholder="Name" />
+                                        <select value={bulletinSignoffForm.signed_off_by || ''} onChange={e => setBulletinSignoffForm(f => ({ ...f, signed_off_by: e.target.value }))}>
+                                          <option value="">— Select person —</option>
+                                          {users.map(u => (
+                                            <option key={u.id} value={u.name}>{u.name}</option>
+                                          ))}
+                                        </select>
                                       </FormField>
                                     </div>
                                   </>

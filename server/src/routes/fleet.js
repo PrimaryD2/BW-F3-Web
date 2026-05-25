@@ -115,7 +115,7 @@ const PLANNED_MAINTENANCE_SELECT = `
   fpm.status, fpm.completed_date, fpm.labor_hours, fpm.additional_work,
   fpm.signoff_notes, fpm.signed_off_by, fpm.signed_off_at, fpm.created_at,
   fst.title AS template_title, fst.category,
-  fa.bw_serial, fa.registration, fa.country_code,
+  fa.bw_serial, fa.registration, fa.country_code, fa.total_hours_tsn AS aircraft_tsn,
   tech.name AS assigned_technician_name,
   cust.full_name AS customer_name
 `;
@@ -890,7 +890,7 @@ router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 's
 
   try {
     const itemRows = await query(
-      `SELECT fpmi.*, fpm.aircraft_id, fpm.id AS planned_id
+      `SELECT fpmi.*, fpm.aircraft_id
        FROM fleet_planned_maintenance_items fpmi
        JOIN fleet_planned_maintenance fpm ON fpm.id = fpmi.planned_id
        WHERE fpmi.id = ?`,
@@ -1040,10 +1040,60 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
 });
 
 // DELETE /api/fleet/planned-maintenance/:pid
+// Supervisors can only delete planned records; admins can delete any (including completed)
 router.delete('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
   try {
-    await query(`DELETE FROM fleet_planned_maintenance WHERE id = ? AND status = 'planned'`, [req.params.pid]);
+    const isAdmin = req.user?.role === 'admin';
+    if (isAdmin) {
+      // Delete work items first, then the parent record
+      await query(`DELETE FROM fleet_planned_maintenance_items WHERE planned_id = ?`, [req.params.pid]);
+      await query(`DELETE FROM fleet_planned_maintenance WHERE id = ?`, [req.params.pid]);
+    } else {
+      await query(`DELETE FROM fleet_planned_maintenance WHERE id = ? AND status = 'planned'`, [req.params.pid]);
+    }
     res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/fleet/planned-maintenance/:pid — admin-only edit of completed maintenance metadata
+router.patch('/planned-maintenance/:pid', requireRole('admin'), async (req, res) => {
+  const { completed_date, labor_hours, signoff_notes, additional_work, signed_off_by } = req.body;
+  try {
+    await query(
+      `UPDATE fleet_planned_maintenance
+       SET completed_date = ?, labor_hours = ?, signoff_notes = ?, additional_work = ?, signed_off_by = ?
+       WHERE id = ? AND status = 'completed'`,
+      [
+        completed_date || null,
+        labor_hours != null && labor_hours !== '' ? parseFloat(labor_hours) : null,
+        signoff_notes || null,
+        additional_work || null,
+        signed_off_by || null,
+        req.params.pid,
+      ]
+    );
+    const rows = await query(
+      `SELECT ${PLANNED_MAINTENANCE_SELECT}
+       FROM fleet_planned_maintenance fpm
+       LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
+       JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
+       LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
+       WHERE fpm.id = ?`,
+      [req.params.pid]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const itemRows = await query(
+      `SELECT fpmi.*, fst.title AS template_title, fst.category
+       FROM fleet_planned_maintenance_items fpmi
+       LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
+      [req.params.pid]
+    );
+    res.json(normPlannedMaintenance({ ...rows[0], items: itemRows }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -1072,18 +1122,26 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
     // Get items for this planned maintenance
     const itemRows = await query(`SELECT * FROM fleet_planned_maintenance_items WHERE planned_id = ? ORDER BY sort_order, id`, [req.params.pid]);
 
-    // Create service records for each item that has a template
+    // Create service records for each item that has a template.
+    // If the item was already signed off individually, reuse its existing record to avoid duplicates.
     let lastRecordId = null;
     for (const item of itemRows) {
       if (!item.template_id) continue;
+      if (item.signed_off && item.signed_off_record_id) {
+        // Already signed off individually — reuse existing service record
+        lastRecordId = item.signed_off_record_id;
+        continue;
+      }
+      // Use the person who actually did the work (item-level signer, or fallback to techName)
+      const workerName = item.signed_off_by || techName;
       const sr = await query(
         `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
-        [planned.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, signoff_notes || planned.planned_comments || null, req.user.id]
+        [planned.aircraft_id, item.template_id, safeDate, hrsAtCompletion, workerName, signoff_notes || planned.planned_comments || null, req.user.id]
       );
       lastRecordId = sr.insertId;
       await query(
         `UPDATE fleet_planned_maintenance_items SET signed_off = 1, signed_off_by = ?, signed_off_at = CURRENT_TIMESTAMP, signed_off_record_id = ? WHERE id = ?`,
-        [techName, lastRecordId, item.id]
+        [workerName, lastRecordId, item.id]
       );
     }
 

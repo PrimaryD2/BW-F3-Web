@@ -1424,6 +1424,7 @@ export default function CustomerDetail() {
   }, [id, isNew, logOrder]);
 
   useEffect(() => {
+    if (!isNew) setLoading(true);
     Promise.all([
       isNew ? Promise.resolve(null) : loadCustomer(),
       getUsers(),
@@ -1434,7 +1435,7 @@ export default function CustomerDetail() {
       setModels(mRes?.data || []);
       setConfigOptions(coRes?.data || []);
     }).finally(() => setLoading(false));
-  }, []);
+  }, [id]); // re-run when id changes (e.g. after creating a new customer)
 
   useEffect(() => {
     if (!isNew && !loading) {

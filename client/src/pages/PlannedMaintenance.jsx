@@ -6,6 +6,7 @@ import {
   getFleetPlannedMaintenance,
   signOffFleetPlannedMaintenance,
   updateFleetPlannedMaintenance,
+  editCompletedFleetPlannedMaintenance,
   signOffMaintenanceItem,
   uploadMaintenanceItemPhoto,
   deleteMaintenanceItemPhoto,
@@ -30,12 +31,37 @@ function LabeledField({ label, children, style }) {
   );
 }
 
+// ─── Interval warning helper ──────────────────────────────────────────────────
+function intervalWarning(templateId, templates, aircraftTsn) {
+  if (!templateId || aircraftTsn == null) return null;
+  const tmpl = templates.find(t => String(t.id) === String(templateId));
+  if (!tmpl || !tmpl.interval_hours) return null;
+  const interval = Number(tmpl.interval_hours);
+  const tsn = Number(aircraftTsn);
+  if (!isFinite(interval) || !isFinite(tsn)) return null;
+
+  if (tmpl.is_one_time) {
+    const delta = tsn - interval;
+    if (delta > 15)  return { type: 'overdue',  msg: `⚠ Aircraft at ${tsn.toFixed(1)} h TSN — this one-time ${interval}h service is ${delta.toFixed(1)} h overdue` };
+    if (delta < -15) return { type: 'early',    msg: `ℹ Aircraft at ${tsn.toFixed(1)} h TSN — this ${interval}h service is not due for another ${(-delta).toFixed(1)} h` };
+    return null;
+  }
+  // Recurring: next due = nearest upcoming multiple of interval
+  const lastDue  = Math.floor(tsn / interval) * interval;
+  const nextDue  = lastDue + interval;
+  const overdueby = tsn - lastDue;
+  if (overdueby > 10) {
+    return { type: 'overdue', msg: `⚠ Aircraft at ${tsn.toFixed(1)} h TSN — ${interval}h service was due at ${lastDue}h (${overdueby.toFixed(1)} h overdue)` };
+  }
+  return null;
+}
+
 // ─── Single work item row ─────────────────────────────────────────────────────
-function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpload, onPhotoDelete }) {
+function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, templates, onSignoff, onPhotoUpload, onPhotoDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     completed_date: new Date().toISOString().slice(0, 10),
-    signed_by: currentUser?.name || '',
+    signed_by: '',
     notes: '',
   });
   const [saving, setSaving] = useState(false);
@@ -43,9 +69,14 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
   const fileInputRef = useRef(null);
 
   const isSigned = Boolean(item.signed_off);
+  const warn = showForm ? intervalWarning(item.template_id, templates, aircraftTsn) : null;
 
   async function handleSave() {
     if (!form.completed_date) return;
+    if (!form.signed_by) {
+      // Can't use toast here, handled via disabled button — just guard
+      return;
+    }
     setSaving(true);
     try {
       await onSignoff(item.id, form);
@@ -70,8 +101,8 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
   return (
     <div style={{
       borderRadius: 8,
-      border: '1px solid var(--border)',
-      background: isSigned ? 'var(--bg-secondary)' : 'var(--bg-secondary)',
+      border: `1px solid ${isSigned ? 'var(--border)' : 'var(--border)'}`,
+      background: 'var(--bg-secondary)',
       overflow: 'hidden',
     }}>
       {/* ── Item header row ── */}
@@ -86,14 +117,25 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
           <div style={{ fontWeight: 600, fontSize: 13, color: isSigned ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: isSigned ? 'line-through' : 'none' }}>
             {item.title || item.template_title || '—'}
           </div>
+          {/* Template category / service type label */}
+          {item.template_title && item.title && item.title !== item.template_title && (
+            <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 1 }}>
+              Template: {item.template_title}
+            </div>
+          )}
+          {/* What needs to be done (description) */}
           {item.description && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{item.description}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3, padding: '4px 8px', background: 'rgba(99,102,241,0.07)', borderRadius: 4, borderLeft: '2px solid var(--accent)' }}>
+              <strong>Instructions:</strong> {item.description}
+            </div>
           )}
           {/* Signed-off info */}
           {isSigned && (
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 3 }}>
-              Signed off by <strong>{item.signed_off_by}</strong> on {fmtDate(item.completed_date)}
-              {item.notes && <> — {item.notes}</>}
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+              ✅ Done by <strong>{item.signed_off_by}</strong> on {fmtDate(item.completed_date)}
+              {item.notes && (
+                <div style={{ marginTop: 2, fontStyle: 'italic', color: 'var(--text-muted)' }}>Notes: {item.notes}</div>
+              )}
             </div>
           )}
         </div>
@@ -133,6 +175,18 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
       {/* ── Inline sign-off form ── */}
       {showForm && !isSigned && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '12px 14px', background: 'var(--bg-tertiary, #111)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Interval warning */}
+          {warn && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 6,
+              background: warn.type === 'overdue' ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.1)',
+              border: `1px solid ${warn.type === 'overdue' ? 'rgba(239,68,68,0.35)' : 'rgba(59,130,246,0.3)'}`,
+              fontSize: 12, color: warn.type === 'overdue' ? 'var(--danger)' : 'var(--text-secondary)',
+            }}>
+              {warn.msg}
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 10 }}>
             <LabeledField label="Date Completed *">
               <input
@@ -141,13 +195,20 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
                 onChange={e => setForm(f => ({ ...f, completed_date: e.target.value }))}
               />
             </LabeledField>
-            <LabeledField label="Done By">
-              <select value={form.signed_by} onChange={e => setForm(f => ({ ...f, signed_by: e.target.value }))}>
+            <LabeledField label="Done By *">
+              <select
+                value={form.signed_by}
+                onChange={e => setForm(f => ({ ...f, signed_by: e.target.value }))}
+                style={{ borderColor: !form.signed_by ? 'var(--danger)' : undefined }}
+              >
                 <option value="">— Select employee —</option>
                 {users.map(u => (
                   <option key={u.id} value={u.name}>{u.name}</option>
                 ))}
               </select>
+              {!form.signed_by && (
+                <span style={{ fontSize: 10, color: 'var(--danger)', marginTop: -4 }}>Required</span>
+              )}
             </LabeledField>
           </div>
           <LabeledField label="Notes — What Was Done">
@@ -155,12 +216,16 @@ function ItemRow({ item, users, currentUser, isSupervisor, onSignoff, onPhotoUpl
               rows={3}
               value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-              placeholder="Describe what was done for this item…"
+              placeholder="Describe exactly what was done for this item…"
               style={{ resize: 'vertical' }}
             />
           </LabeledField>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving || !form.completed_date}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleSave}
+              disabled={saving || !form.completed_date || !form.signed_by}
+            >
               {saving ? 'Saving…' : 'Confirm Sign-off'}
             </button>
           </div>
@@ -206,6 +271,7 @@ function emptySignoffForm(item) {
     labor_hours: '',
     additional_work: '',
     signoff_notes: item?.planned_comments || '',
+    signed_by: '',
   };
 }
 
@@ -227,6 +293,16 @@ function emptyEditForm(item) {
   };
 }
 
+function emptyCompletedEditForm(item) {
+  return {
+    completed_date: item?.completed_date ? String(item.completed_date).slice(0, 10) : '',
+    labor_hours: item?.labor_hours != null ? String(item.labor_hours) : '',
+    signoff_notes: item?.signoff_notes || '',
+    additional_work: item?.additional_work || '',
+    signed_off_by: item?.signed_off_by || '',
+  };
+}
+
 const EMPTY_PM_ITEM = { template_id: '', title: '', description: '' };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -234,7 +310,7 @@ const EMPTY_PM_ITEM = { template_id: '', title: '', description: '' };
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function PlannedMaintenance() {
   const navigate = useNavigate();
-  const { isSupervisor, user } = useAuth();
+  const { isSupervisor, isAdmin, user } = useAuth();
   const toast = useToast();
 
   const [items, setItems] = useState([]);
@@ -246,6 +322,10 @@ export default function PlannedMaintenance() {
   const [signoffForm, setSignoffForm] = useState(emptySignoffForm());
   const [editForm, setEditForm] = useState(emptyEditForm());
   const [saving, setSaving] = useState(false);
+
+  // Admin: edit completed records
+  const [editingCompletedId, setEditingCompletedId] = useState(null);
+  const [completedEditForm, setCompletedEditForm] = useState(emptyCompletedEditForm());
 
   useEffect(() => { load(); }, []);
 
@@ -267,7 +347,7 @@ export default function PlannedMaintenance() {
     }
   }
 
-  const plannedItems = useMemo(() => items.filter(i => i.status === 'planned'), [items]);
+  const plannedItems  = useMemo(() => items.filter(i => i.status === 'planned'),   [items]);
   const completedItems = useMemo(() => items.filter(i => i.status === 'completed'), [items]);
 
   // ── Item-level sign-off ───────────────────────────────────────────────────
@@ -328,12 +408,21 @@ export default function PlannedMaintenance() {
 
   async function handleSignoff(pm) {
     if (!signoffForm.completed_date) { toast.error('Completed date is required'); return; }
+    if (!signoffForm.signed_by) { toast.error('Select who is authorizing this maintenance'); return; }
+
+    // Double sign-off check: authorizer must not be the same person who signed off any work item
+    const itemSigners = new Set((pm.items || []).map(it => it.signed_off_by).filter(Boolean));
+    if (itemSigners.has(signoffForm.signed_by)) {
+      toast.error(`${signoffForm.signed_by} already signed off work items — a different person must authorize the maintenance`);
+      return;
+    }
+
     setSaving(true);
     try {
-      const res = await signOffFleetPlannedMaintenance(pm.id, { ...signoffForm, signed_by: user?.name || '' });
+      const res = await signOffFleetPlannedMaintenance(pm.id, signoffForm);
       setItems(prev => prev.map(e => e.id === pm.id ? res.data : e));
       setOpenSignoffId(null);
-      toast.success('Maintenance signed off and logged');
+      toast.success('Maintenance authorized and logged');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to sign off maintenance');
     } finally {
@@ -367,16 +456,43 @@ export default function PlannedMaintenance() {
   }
 
   async function handleDelete(pm) {
-    if (!window.confirm('Delete this planned maintenance?')) return;
+    const isCompleted = pm.status === 'completed';
+    if (!window.confirm(
+      isCompleted
+        ? `Delete completed maintenance record for ${pm.bw_serial}? This cannot be undone.`
+        : 'Delete this planned maintenance?'
+    )) return;
     setSaving(true);
     try {
       await deleteFleetPlannedMaintenance(pm.id);
       setItems(prev => prev.filter(e => e.id !== pm.id));
       if (openEditId === pm.id) setOpenEditId(null);
       if (openSignoffId === pm.id) setOpenSignoffId(null);
-      toast.success('Planned maintenance deleted');
+      if (editingCompletedId === pm.id) setEditingCompletedId(null);
+      toast.success(isCompleted ? 'Completed record deleted' : 'Planned maintenance deleted');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to delete planned maintenance');
+      toast.error(err.response?.data?.error || 'Failed to delete');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Admin: edit completed maintenance ─────────────────────────────────────
+  function openEditCompleted(pm) {
+    setEditingCompletedId(pm.id);
+    setCompletedEditForm(emptyCompletedEditForm(pm));
+  }
+
+  async function handleSaveEditCompleted(pm) {
+    if (!completedEditForm.completed_date) { toast.error('Completed date is required'); return; }
+    setSaving(true);
+    try {
+      const res = await editCompletedFleetPlannedMaintenance(pm.id, completedEditForm);
+      setItems(prev => prev.map(e => e.id === pm.id ? res.data : e));
+      setEditingCompletedId(null);
+      toast.success('Record updated');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update record');
     } finally {
       setSaving(false);
     }
@@ -389,7 +505,7 @@ export default function PlannedMaintenance() {
         <div>
           <div className="page-title">Planned Maintenance</div>
           <div className="page-subtitle">
-            {plannedItems.length} open item{plannedItems.length === 1 ? '' : 's'} · sign off individual work items as they are completed
+            {plannedItems.length} open item{plannedItems.length === 1 ? '' : 's'} · sign off individual work items, then authorize the whole maintenance
           </div>
         </div>
       </div>
@@ -413,6 +529,7 @@ export default function PlannedMaintenance() {
                   const pmItems = pm.items || [];
                   const allItemsSigned = pmItems.length > 0 && pmItems.every(i => i.signed_off);
                   const signedCount = pmItems.filter(i => i.signed_off).length;
+                  const itemSigners = new Set(pmItems.map(it => it.signed_off_by).filter(Boolean));
 
                   return (
                     <div key={pm.id} style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
@@ -424,6 +541,11 @@ export default function PlannedMaintenance() {
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
                             <span style={{ fontWeight: 800, fontSize: 15 }}>{pm.bw_serial}</span>
                             {pm.registration && <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{pm.registration}</span>}
+                            {pm.aircraft_tsn != null && (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                                {Number(pm.aircraft_tsn).toFixed(1)} h TSN
+                              </span>
+                            )}
                             {pmItems.length > 0 && (
                               <span style={{
                                 padding: '1px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700,
@@ -474,10 +596,10 @@ export default function PlannedMaintenance() {
                               {/* "Mark Complete" shows when all items are signed OR there are no items */}
                               {(allItemsSigned || pmItems.length === 0) && (
                                 <button className="btn btn-primary btn-sm" style={{ fontSize: 12 }} onClick={() => isSigning ? setOpenSignoffId(null) : openSignoff(pm)}>
-                                  {isSigning ? 'Close' : allItemsSigned ? '✅ Mark Complete' : 'Sign Off'}
+                                  {isSigning ? 'Close' : allItemsSigned ? '✅ Authorize & Complete' : 'Sign Off'}
                                 </button>
                               )}
-                              {/* "Sign Off" button when no items at all */}
+                              {/* Force sign-off when items exist but not all signed */}
                               {pmItems.length > 0 && !allItemsSigned && (
                                 <button
                                   className="btn btn-ghost btn-sm"
@@ -505,6 +627,8 @@ export default function PlannedMaintenance() {
                               users={users}
                               currentUser={user}
                               isSupervisor={isSupervisor}
+                              aircraftTsn={pm.aircraft_tsn}
+                              templates={templates}
                               onSignoff={handleItemSignoff}
                               onPhotoUpload={handleItemPhotoUpload}
                               onPhotoDelete={handleItemPhotoDelete}
@@ -522,21 +646,32 @@ export default function PlannedMaintenance() {
                           fontSize: 13, color: '#22c55e', fontWeight: 600,
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
                         }}>
-                          <span>✅ All {pmItems.length} items signed off — ready to mark complete</span>
+                          <span>✅ All {pmItems.length} items signed off — ready for authorization</span>
                           {isSupervisor && (
                             <button className="btn btn-primary btn-sm" style={{ fontSize: 11 }} onClick={() => openSignoff(pm)}>
-                              Mark Complete
+                              Authorize & Complete
                             </button>
                           )}
                         </div>
                       )}
 
-                      {/* ── Full PM sign-off form ── */}
+                      {/* ── Full PM sign-off / authorization form ── */}
                       {isSigning && (
                         <div style={{ margin: '0 16px 16px', padding: '16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-tertiary, #111)' }}>
-                          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
-                            {allItemsSigned ? 'Complete & Log Maintenance' : 'Sign Off Maintenance'}
+                          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+                            {allItemsSigned ? 'Authorize & Log Maintenance' : 'Sign Off Maintenance'}
                           </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                            The authorizing person must be different from whoever signed off individual work items.
+                          </div>
+
+                          {/* Double-sign warning: list who signed items */}
+                          {itemSigners.size > 0 && (
+                            <div style={{ marginBottom: 12, padding: '8px 12px', background: 'rgba(59,130,246,0.08)', borderRadius: 6, border: '1px solid rgba(59,130,246,0.25)', fontSize: 12 }}>
+                              Work items signed by: <strong>{[...itemSigners].join(', ')}</strong>
+                              {' '}— the authorizer below must be a different person.
+                            </div>
+                          )}
 
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
                             <LabeledField label="Completed Date *">
@@ -546,7 +681,7 @@ export default function PlannedMaintenance() {
                                 onChange={e => setSignoffForm(f => ({ ...f, completed_date: e.target.value }))}
                               />
                             </LabeledField>
-                            <LabeledField label="Total Hours">
+                            <LabeledField label="Labor Hours">
                               <input
                                 type="number"
                                 min="0"
@@ -555,6 +690,28 @@ export default function PlannedMaintenance() {
                                 onChange={e => setSignoffForm(f => ({ ...f, labor_hours: e.target.value }))}
                                 placeholder="0.0"
                               />
+                            </LabeledField>
+                            <LabeledField label="Authorized By *">
+                              <select
+                                value={signoffForm.signed_by}
+                                onChange={e => setSignoffForm(f => ({ ...f, signed_by: e.target.value }))}
+                                style={{ borderColor: !signoffForm.signed_by ? 'var(--danger)' : (itemSigners.has(signoffForm.signed_by) ? '#f59e0b' : undefined) }}
+                              >
+                                <option value="">— Select authorizer —</option>
+                                {users.map(u => {
+                                  const isItemSigner = itemSigners.has(u.name);
+                                  return (
+                                    <option key={u.id} value={u.name} disabled={isItemSigner}>
+                                      {u.name}{isItemSigner ? ' (signed work items)' : ''}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              {signoffForm.signed_by && itemSigners.has(signoffForm.signed_by) && (
+                                <span style={{ fontSize: 10, color: '#f59e0b', marginTop: -4 }}>
+                                  This person signed work items — must be a different person
+                                </span>
+                              )}
                             </LabeledField>
                           </div>
 
@@ -577,7 +734,11 @@ export default function PlannedMaintenance() {
                           </LabeledField>
 
                           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                            <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => handleSignoff(pm)}>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              disabled={saving || !signoffForm.signed_by || itemSigners.has(signoffForm.signed_by)}
+                              onClick={() => handleSignoff(pm)}
+                            >
                               {saving ? 'Saving…' : 'Confirm & Log to Aircraft'}
                             </button>
                           </div>
@@ -643,7 +804,7 @@ export default function PlannedMaintenance() {
                                   <input
                                     value={it.description}
                                     onChange={e => setEditForm(f => { const its = [...f.items]; its[idx] = { ...its[idx], description: e.target.value }; return { ...f, items: its }; })}
-                                    placeholder="Additional notes (optional)"
+                                    placeholder="Instructions / what needs to be done (optional)"
                                     style={{ fontSize: 13 }}
                                   />
                                 </div>
@@ -690,41 +851,55 @@ export default function PlannedMaintenance() {
             {completedItems.length === 0 ? (
               <p style={{ color: 'var(--text-muted)', margin: 0 }}>No maintenance has been signed off yet.</p>
             ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Aircraft</th>
-                      <th>Work Done</th>
-                      <th>Customer</th>
-                      <th>Planned Arrival</th>
-                      <th>Completed</th>
-                      <th>Hours</th>
-                      <th>Signed Off By</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {completedItems.map(pm => (
-                      <tr key={pm.id} onClick={() => navigate(`/fleet/${pm.aircraft_id}`)} style={{ cursor: 'pointer' }}>
-                        <td style={{ fontWeight: 700 }}>
-                          {pm.bw_serial}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {completedItems.map(pm => {
+                  const isEditingThis = editingCompletedId === pm.id;
+                  return (
+                    <div key={pm.id} style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                      {/* Row */}
+                      <div
+                        style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start', padding: '12px 14px', cursor: 'pointer' }}
+                        onClick={() => navigate(`/fleet/${pm.aircraft_id}`)}
+                      >
+                        {/* Aircraft */}
+                        <div style={{ minWidth: 110, flexShrink: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{pm.bw_serial}</div>
                           {pm.registration && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{pm.registration}</div>}
-                        </td>
-                        <td>
+                        </div>
+
+                        {/* Work done */}
+                        <div style={{ flex: 2, minWidth: 180 }}>
                           {pm.items && pm.items.length > 0 ? (
-                            <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                               {pm.items.map(it => (
-                                <li key={it.id}>{it.title || it.template_title || '—'}</li>
+                                <div key={it.id} style={{ fontSize: 13 }}>
+                                  <span style={{ fontWeight: 500 }}>{it.title || it.template_title || '—'}</span>
+                                  {it.signed_off_by && (
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>
+                                      (done by {it.signed_off_by})
+                                    </span>
+                                  )}
+                                  {it.notes && (
+                                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 1, fontStyle: 'italic' }}>
+                                      {it.notes}
+                                    </div>
+                                  )}
+                                </div>
                               ))}
-                            </ul>
+                            </div>
                           ) : (
-                            <span>{pm.template_title || '—'}</span>
+                            <span style={{ fontSize: 13 }}>{pm.template_title || '—'}</span>
+                          )}
+                          {pm.signoff_notes && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{pm.signoff_notes}</div>
                           )}
                           {pm.additional_work && (
                             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Extra: {pm.additional_work}</div>
                           )}
-                        </td>
-                        <td>
+                        </div>
+
+                        {/* Customer */}
+                        <div style={{ minWidth: 100, flexShrink: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
                           {pm.customer_name ? (
                             <button
                               className="btn btn-ghost btn-sm"
@@ -734,15 +909,103 @@ export default function PlannedMaintenance() {
                               {pm.customer_name}
                             </button>
                           ) : '–'}
-                        </td>
-                        <td>{fmtDate(pm.planned_arrival_date || pm.planned_date)}</td>
-                        <td>{fmtDate(pm.completed_date)}</td>
-                        <td>{pm.labor_hours != null ? `${Number(pm.labor_hours).toFixed(1)} h` : '–'}</td>
-                        <td>{pm.signed_off_by || '–'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+
+                        {/* Dates + signer */}
+                        <div style={{ minWidth: 160, flexShrink: 0, fontSize: 12 }}>
+                          <div style={{ color: 'var(--text-secondary)' }}>
+                            Planned: {fmtDate(pm.planned_arrival_date || pm.planned_date)}
+                          </div>
+                          <div style={{ color: 'var(--text-primary)', marginTop: 2 }}>
+                            Completed: <strong>{fmtDate(pm.completed_date)}</strong>
+                          </div>
+                          {pm.labor_hours != null && (
+                            <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                              {Number(pm.labor_hours).toFixed(1)} h labor
+                            </div>
+                          )}
+                          <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                            Authorized: {pm.signed_off_by || '–'}
+                          </div>
+                        </div>
+
+                        {/* Admin actions */}
+                        {isAdmin && (
+                          <div style={{ flexShrink: 0, display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: 11 }}
+                              onClick={() => isEditingThis ? setEditingCompletedId(null) : openEditCompleted(pm)}
+                            >
+                              {isEditingThis ? 'Cancel' : 'Edit'}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              style={{ fontSize: 11, color: 'var(--danger)' }}
+                              onClick={() => handleDelete(pm)}
+                              disabled={saving}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Admin edit form for completed record */}
+                      {isEditingThis && (
+                        <div style={{ borderTop: '1px solid var(--border)', padding: '14px 16px', background: 'var(--bg-tertiary, #111)' }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12 }}>Edit Completed Record</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+                            <LabeledField label="Completed Date *">
+                              <input
+                                type="date"
+                                value={completedEditForm.completed_date}
+                                onChange={e => setCompletedEditForm(f => ({ ...f, completed_date: e.target.value }))}
+                              />
+                            </LabeledField>
+                            <LabeledField label="Labor Hours">
+                              <input
+                                type="number" step="0.1" min="0"
+                                value={completedEditForm.labor_hours}
+                                onChange={e => setCompletedEditForm(f => ({ ...f, labor_hours: e.target.value }))}
+                                placeholder="0.0"
+                              />
+                            </LabeledField>
+                            <LabeledField label="Authorized By">
+                              <select
+                                value={completedEditForm.signed_off_by}
+                                onChange={e => setCompletedEditForm(f => ({ ...f, signed_off_by: e.target.value }))}
+                              >
+                                <option value="">— Select person —</option>
+                                {users.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                              </select>
+                            </LabeledField>
+                          </div>
+                          <LabeledField label="Sign-off Notes" style={{ marginBottom: 10 }}>
+                            <textarea
+                              rows={2}
+                              value={completedEditForm.signoff_notes}
+                              onChange={e => setCompletedEditForm(f => ({ ...f, signoff_notes: e.target.value }))}
+                            />
+                          </LabeledField>
+                          <LabeledField label="Additional Work" style={{ marginBottom: 12 }}>
+                            <textarea
+                              rows={2}
+                              value={completedEditForm.additional_work}
+                              onChange={e => setCompletedEditForm(f => ({ ...f, additional_work: e.target.value }))}
+                            />
+                          </LabeledField>
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditingCompletedId(null)}>Cancel</button>
+                            <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => handleSaveEditCompleted(pm)}>
+                              {saving ? 'Saving…' : 'Save Changes'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
