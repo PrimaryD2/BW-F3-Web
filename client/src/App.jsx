@@ -19,6 +19,7 @@ import AircraftGallery from './pages/AircraftGallery';
 import PlannedMaintenance from './pages/PlannedMaintenance';
 import CustomerList from './pages/CustomerList';
 import CustomerDetail from './pages/CustomerDetail';
+import Components from './pages/Components';
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -52,6 +53,7 @@ function AppRoutes() {
         <Route path="planned-maintenance" element={<PlannedMaintenance />} />
         <Route path="customers" element={<CustomerList />} />
         <Route path="customers/:id" element={<CustomerDetail />} />
+        <Route path="components" element={<Components />} />
         <Route path="admin" element={
           <ProtectedRoute roles={['admin']}>
             <AdminPanel />

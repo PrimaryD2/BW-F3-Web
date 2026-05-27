@@ -31,6 +31,8 @@ export const login           = (d) => api.post('/auth/login', d);
 export const getMe           = ()  => api.get('/auth/me');
 export const changePassword  = (d) => api.post('/auth/change-password', d);
 export const verifyPassword  = (d) => api.post('/auth/verify-password', d);
+// Returns {id, name, role} for all active users — accessible to all roles (for dropdowns)
+export const getActiveUsers  = ()  => api.get('/auth/users');
 
 // ─── Airplanes ────────────────────────────────────────────────────────────────
 export const getAirplanes    = (p) => api.get('/airplanes', { params: p });
@@ -68,6 +70,10 @@ export const updateUser      = (id, d) => api.put(`/admin/users/${id}`, d);
 export const getRoles        = () => api.get('/admin/roles');
 export const getRolePermissions = () => api.get('/admin/permissions');
 export const updateRolePermissions = (role, permissions) => api.put(`/admin/permissions/${role}`, { permissions });
+export const getComponentTypes    = ()        => api.get('/admin/component-types');
+export const createComponentType  = (d)       => api.post('/admin/component-types', d);
+export const updateComponentType  = (id, d)   => api.put(`/admin/component-types/${id}`, d);
+export const deleteComponentType  = (id)      => api.delete(`/admin/component-types/${id}`);
 export const getFleetModelsAdmin = () => api.get('/admin/models');
 export const createFleetModel = (d) => api.post('/admin/models', d);
 export const updateFleetModel = (id, d) => api.put(`/admin/models/${id}`, d);
@@ -107,6 +113,7 @@ export const createFleetConfigOption = (d)       => api.post('/fleet/config-opti
 export const updateFleetConfigOption = (oid, d)  => api.put(`/fleet/config-options/${oid}`, d);
 export const deleteFleetConfigOption = (oid)     => api.delete(`/fleet/config-options/${oid}`);
 
+export const getFleetComponents         = (params)   => api.get('/fleet/components', { params });
 export const getFleetServiceTemplates   = ()         => api.get('/fleet/service-templates');
 export const createFleetServiceTemplate = (d)        => api.post('/fleet/service-templates', d);
 export const updateFleetServiceTemplate = (tid, d)   => api.put(`/fleet/service-templates/${tid}`, d);

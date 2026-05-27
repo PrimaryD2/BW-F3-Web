@@ -115,10 +115,34 @@ const PLANNED_MAINTENANCE_SELECT = `
   fpm.status, fpm.completed_date, fpm.labor_hours, fpm.additional_work,
   fpm.signoff_notes, fpm.signed_off_by, fpm.signed_off_at, fpm.created_at,
   fst.title AS template_title, fst.category,
-  fa.bw_serial, fa.registration, fa.country_code, fa.total_hours_tsn AS aircraft_tsn,
+  fa.bw_serial, fa.registration, fa.model, fa.country_code, fa.total_hours_tsn AS aircraft_tsn,
   tech.name AS assigned_technician_name,
-  cust.full_name AS customer_name
+  COALESCE(cust.full_name, fa.customer_name) AS customer_name
 `;
+
+// ─── Components list (all serials across fleet) ──────────────────────────────
+
+// GET /api/fleet/components?type=Engine&search=
+router.get('/components', async (req, res) => {
+  try {
+    const { type, search } = req.query;
+    let q = `
+      SELECT fsn.*, fa.bw_serial, fa.registration, fa.model, fa.build_status
+      FROM fleet_serial_numbers fsn
+      JOIN fleet_aircraft fa ON fa.id = fsn.aircraft_id
+      WHERE 1=1`;
+    const params = [];
+    if (type) { q += ' AND fsn.component_type = ?'; params.push(type); }
+    if (search) {
+      q += ' AND (fsn.component_name LIKE ? OR fsn.serial_number LIKE ? OR fsn.component_type LIKE ? OR fsn.software_version LIKE ?)';
+      const like = `%${search}%`;
+      params.push(like, like, like, like);
+    }
+    q += ' ORDER BY fsn.component_type, fsn.component_name, fa.bw_serial';
+    const rows = await query(q, params);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
 
 // ─── Service Templates (registered before /:id to avoid param capture) ──────────
 
@@ -190,9 +214,10 @@ router.get('/planned-maintenance', async (_req, res) => {
 
     if (ids.length) {
       const itemRows = await query(
-        `SELECT fpmi.*, fst.title AS template_title, fst.category
+        `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
          FROM fleet_planned_maintenance_items fpmi
          LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+         LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
          WHERE fpmi.planned_id IN (${ids.map(() => '?').join(',')})
          ORDER BY fpmi.sort_order, fpmi.id`,
         ids
@@ -713,9 +738,10 @@ router.get('/:id', async (req, res) => {
     let pmItemsByPm = {};
     if (pmIds.length) {
       const pmItemRows = await query(
-        `SELECT fpmi.*, fst.title AS template_title, fst.category
+        `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
          FROM fleet_planned_maintenance_items fpmi
          LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+         LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
          WHERE fpmi.planned_id IN (${pmIds.map(() => '?').join(',')})
          ORDER BY fpmi.sort_order, fpmi.id`,
         pmIds
@@ -851,8 +877,8 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       await query(
-        `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, sort_order) VALUES (?,?,?,?,?)`,
-        [plannedId, item.template_id || null, item.title || '', item.description || null, i]
+        `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
+        [plannedId, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
       );
     }
 
@@ -867,9 +893,10 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
       [plannedId]
     );
     const itemRows = await query(
-      `SELECT fpmi.*, fst.title AS template_title, fst.category
+      `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
        FROM fleet_planned_maintenance_items fpmi
        LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
        WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
       [plannedId]
     );
@@ -1006,8 +1033,8 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         await query(
-          `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, sort_order) VALUES (?,?,?,?,?)`,
-          [req.params.pid, item.template_id || null, item.title || '', item.description || null, i]
+          `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
+          [req.params.pid, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
         );
       }
     }
@@ -1025,9 +1052,10 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
     if (!rows.length) return res.status(404).json({ error: 'Planned maintenance not found' });
 
     const itemRows = await query(
-      `SELECT fpmi.*, fst.title AS template_title, fst.category
+      `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
        FROM fleet_planned_maintenance_items fpmi
        LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
        WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
       [req.params.pid]
     );
@@ -1087,9 +1115,10 @@ router.patch('/planned-maintenance/:pid', requireRole('admin'), async (req, res)
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const itemRows = await query(
-      `SELECT fpmi.*, fst.title AS template_title, fst.category
+      `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
        FROM fleet_planned_maintenance_items fpmi
        LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
        WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
       [req.params.pid]
     );
@@ -1192,9 +1221,10 @@ router.post('/planned-maintenance/:pid/signoff', requireRole('admin', 'superviso
       [req.params.pid]
     );
     const updatedItems = await query(
-      `SELECT fpmi.*, fst.title AS template_title, fst.category
+      `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
        FROM fleet_planned_maintenance_items fpmi
        LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
        WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
       [req.params.pid]
     );

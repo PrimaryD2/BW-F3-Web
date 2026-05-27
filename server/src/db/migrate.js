@@ -582,6 +582,26 @@ const ALTER_STMTS = [
   // without requiring the user to flip the flag manually. Only flips false→true,
   // so it's idempotent and won't unflag templates the user intentionally toggled.
   `UPDATE fleet_service_templates SET is_one_time = TRUE WHERE interval_hours IN (25, 200, 600) AND is_one_time = FALSE`,
+  // Component types lookup table (managed in Admin Panel)
+  `CREATE TABLE IF NOT EXISTS fleet_component_types (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     name VARCHAR(120) NOT NULL UNIQUE,
+     sort_order INT NOT NULL DEFAULT 0,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   )`,
+  // Per-item assigned technician
+  `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
+  // Bulletin serial criteria (match by component type + serial number range/exact)
+  `CREATE TABLE IF NOT EXISTS fleet_bulletin_serial_criteria (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     bulletin_id INT NOT NULL,
+     component_type VARCHAR(120) NOT NULL,
+     component_name VARCHAR(180) NULL,
+     serial_from VARCHAR(120) NULL,
+     serial_to   VARCHAR(120) NULL,
+     exact_serial VARCHAR(120) NULL,
+     FOREIGN KEY (bulletin_id) REFERENCES fleet_bulletins(id) ON DELETE CASCADE
+   )`,
 ];
 
 async function migrate() {

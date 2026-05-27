@@ -9,11 +9,12 @@ import {
   getFleetConfigOptions, createFleetConfigOption, updateFleetConfigOption, deleteFleetConfigOption,
   getFleetServiceTemplates, createFleetServiceTemplate, updateFleetServiceTemplate, deleteFleetServiceTemplate,
   getFleetEventTypes, createFleetEventType, updateFleetEventType, deleteFleetEventType,
+  getComponentTypes, createComponentType, updateComponentType, deleteComponentType,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -50,6 +51,7 @@ export default function AdminPanel() {
       {tab === 3 && <FleetConfigTab />}
       {tab === 4 && <ServiceTemplatesSection />}
       {tab === 5 && <EventTypesSection />}
+      {tab === 6 && <ComponentTypesSection />}
     </div>
   );
 }
@@ -1359,6 +1361,7 @@ const EMPTY_BULLETIN_FORM = {
   category: 'optional',
   what_to_do: '',
   affected_option_ids: [],
+  serial_criteria: [],
 };
 
 function bulletinCategoryMeta(value) {
@@ -1376,20 +1379,24 @@ function BulletinsTab() {
   const [showForm,     setShowForm]     = useState(false);
 
   // "View affected aircraft" drawer
-  const [selected,    setSelected]    = useState(null);     // bulletin object
-  const [affected,    setAffected]    = useState([]);
-  const [resolveForm, setResolveForm] = useState({});       // { [aircraft_id]: {...} }
-  const [users,       setUsers]       = useState([]);
+  const [selected,        setSelected]       = useState(null);     // bulletin object
+  const [affected,        setAffected]       = useState([]);
+  const [resolveForm,     setResolveForm]    = useState({});       // { [aircraft_id]: {...} }
+  const [users,           setUsers]          = useState([]);
+  const [componentTypes,  setComponentTypes] = useState([]);
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
     try {
-      const [bRes, oRes, uRes] = await Promise.all([getFleetBulletins(), getFleetConfigOptions(), getUsers()]);
+      const [bRes, oRes, uRes, ctRes] = await Promise.all([
+        getFleetBulletins(), getFleetConfigOptions(), getUsers(), getComponentTypes(),
+      ]);
       setBulletins(bRes.data || []);
       setConfigOptions(oRes.data || []);
       setUsers(uRes.data || []);
+      setComponentTypes(ctRes.data || []);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load bulletins');
     } finally { setLoading(false); }
@@ -1418,6 +1425,10 @@ function BulletinsTab() {
         category:            data.category || 'optional',
         what_to_do:          data.what_to_do || '',
         affected_option_ids: data.affected_option_ids || [],
+        serial_criteria:     (data.serial_criteria || []).map(c => ({
+          ...c,
+          _mode: c.exact_serial ? 'exact' : 'range',
+        })),
       });
       setEditingId(bulletin.id);
       setShowForm(true);
@@ -1440,16 +1451,40 @@ function BulletinsTab() {
     });
   }
 
+  function addCriteria() {
+    setForm(f => ({
+      ...f,
+      serial_criteria: [...f.serial_criteria, { component_type: '', component_name: '', serial_from: '', serial_to: '', exact_serial: '', _mode: 'range' }],
+    }));
+  }
+
+  function removeCriteria(i) {
+    setForm(f => ({ ...f, serial_criteria: f.serial_criteria.filter((_, j) => j !== i) }));
+  }
+
+  function updateCriteria(i, field, value) {
+    setForm(f => {
+      const arr = [...f.serial_criteria];
+      arr[i] = { ...arr[i], [field]: value };
+      return { ...f, serial_criteria: arr };
+    });
+  }
+
   async function save(e) {
     if (e?.preventDefault) e.preventDefault();
     if (!form.title.trim()) { toast.error('Title is required'); return; }
     setSaving(true);
     try {
+      // Strip UI-only _mode field before sending to server
+      const payload = {
+        ...form,
+        serial_criteria: form.serial_criteria.map(({ _mode, ...rest }) => rest),
+      };
       if (editingId) {
-        await updateFleetBulletin(editingId, form);
+        await updateFleetBulletin(editingId, payload);
         toast.success('Bulletin updated');
       } else {
-        const res = await createFleetBulletin(form);
+        const res = await createFleetBulletin(payload);
         toast.success(`Bulletin created — ${res.data.matched_aircraft_count || 0} aircraft affected`);
       }
       closeForm();
@@ -1614,10 +1649,102 @@ function BulletinsTab() {
                 </div>
               )}
 
-              {form.affected_option_ids.length === 0 && (
+              {form.affected_option_ids.length === 0 && form.serial_criteria.length === 0 && (
                 <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8, marginBottom: 0 }}>
-                  ⚠ With no options selected, no aircraft will be marked as affected.
+                  ⚠ With no options selected and no serial criteria, no aircraft will be marked as affected.
                 </p>
+              )}
+            </div>
+
+            {/* Serial Number Criteria */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                <div>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>Serial Number Criteria</span>
+                  <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                    Target specific component serial numbers — e.g. engine 915 iS serials 10050–10250.
+                    Matched independently of configuration options above.
+                  </p>
+                </div>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={addCriteria} style={{ flexShrink: 0, marginLeft: 16 }}>+ Add</button>
+              </div>
+
+              {form.serial_criteria.length === 0 ? (
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
+                  No serial criteria added. Use this if the bulletin targets specific serial number ranges or individual serials.
+                </p>
+              ) : (
+                form.serial_criteria.map((c, i) => (
+                  <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 8, background: 'var(--bg-secondary)' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div className="form-group" style={{ flex: '1 1 130px', margin: 0 }}>
+                        <label style={{ fontSize: 11 }}>Component Type *</label>
+                        <select
+                          value={c.component_type}
+                          onChange={e => updateCriteria(i, 'component_type', e.target.value)}
+                        >
+                          <option value="">— Select type —</option>
+                          {componentTypes.map(ct => (
+                            <option key={ct.id} value={ct.name}>{ct.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ flex: '1 1 130px', margin: 0 }}>
+                        <label style={{ fontSize: 11 }}>Model / Name</label>
+                        <input
+                          value={c.component_name || ''}
+                          onChange={e => updateCriteria(i, 'component_name', e.target.value)}
+                          placeholder="e.g. Rotax 915 iS"
+                        />
+                      </div>
+                      <div className="form-group" style={{ flex: '0 0 110px', margin: 0 }}>
+                        <label style={{ fontSize: 11 }}>Match type</label>
+                        <select
+                          value={c._mode || 'range'}
+                          onChange={e => updateCriteria(i, '_mode', e.target.value)}
+                        >
+                          <option value="range">Range</option>
+                          <option value="exact">Exact serial</option>
+                        </select>
+                      </div>
+                      {(c._mode || 'range') === 'range' ? (
+                        <>
+                          <div className="form-group" style={{ flex: '0 0 100px', margin: 0 }}>
+                            <label style={{ fontSize: 11 }}>Serial From</label>
+                            <input
+                              value={c.serial_from || ''}
+                              onChange={e => updateCriteria(i, 'serial_from', e.target.value)}
+                              placeholder="10050"
+                            />
+                          </div>
+                          <div className="form-group" style={{ flex: '0 0 100px', margin: 0 }}>
+                            <label style={{ fontSize: 11 }}>Serial To</label>
+                            <input
+                              value={c.serial_to || ''}
+                              onChange={e => updateCriteria(i, 'serial_to', e.target.value)}
+                              placeholder="10250"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="form-group" style={{ flex: '1 1 130px', margin: 0 }}>
+                          <label style={{ fontSize: 11 }}>Exact Serial</label>
+                          <input
+                            value={c.exact_serial || ''}
+                            onChange={e => updateCriteria(i, 'exact_serial', e.target.value)}
+                            placeholder="10500"
+                          />
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ color: 'var(--danger)', flexShrink: 0, alignSelf: 'flex-end' }}
+                        onClick={() => removeCriteria(i)}
+                      >✕</button>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
 
@@ -1997,6 +2124,149 @@ function ServiceTemplatesSection() {
                         : <div style={{ display: 'flex', gap: 4 }}>
                             <button className="btn btn-ghost btn-sm" onClick={() => { setEditSvcId(t.id); setEditSvc({ category: t.category, title: t.title, interval_hours: t.interval_hours ?? '', interval_months: t.interval_months ?? '', description: t.description ?? '', is_one_time: !!t.is_one_time }); }}>✎</button>
                             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDeleteSvc(t.id)}>✕</button>
+                          </div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Component Types Section ──────────────────────────────────────────────────
+const EMPTY_CT = { name: '', sort_order: 0 };
+
+function ComponentTypesSection() {
+  const toast = useToast();
+  const [types,    setTypes]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [addForm,  setAddForm]  = useState(EMPTY_CT);
+  const [editId,   setEditId]   = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving,   setSaving]   = useState(false);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try { const r = await getComponentTypes(); setTypes(r.data || []); }
+    finally { setLoading(false); }
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (!addForm.name.trim()) { toast.error('Name is required'); return; }
+    setSaving(true);
+    try {
+      const r = await createComponentType(addForm);
+      setTypes(t => [...t, r.data]);
+      setAddForm(EMPTY_CT);
+      toast.success('Component type added');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleUpdate(tid) {
+    setSaving(true);
+    try {
+      const r = await updateComponentType(tid, editForm);
+      setTypes(t => t.map(x => x.id === tid ? r.data : x));
+      setEditId(null);
+      toast.success('Updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(tid) {
+    if (!window.confirm('Delete this component type? This does not remove existing serial numbers that use it.')) return;
+    try {
+      await deleteComponentType(tid);
+      setTypes(t => t.filter(x => x.id !== tid));
+      toast.success('Deleted');
+    } catch { toast.error('Delete failed'); }
+  }
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Component Types</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        Define the types that appear in the <strong>Type</strong> dropdown when registering component serial numbers on an aircraft.
+        Used for filtering the Components page and targeting bulletins by serial range.
+      </p>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 12 }}>Add Component Type</div>
+        <form onSubmit={handleAdd}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '1 1 200px', margin: 0 }}>
+              <label>Name *</label>
+              <input
+                value={addForm.name}
+                onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Engine, Parachute, ELT, Avionics"
+              />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 80px', margin: 0 }}>
+              <label>Order</label>
+              <input
+                type="number"
+                value={addForm.sort_order}
+                onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto', margin: 0 }}>
+              <label>&nbsp;</label>
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? '…' : '+ Add'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)' }}>Loading…</p>
+      ) : types.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>
+          No component types yet. Add some above.
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th style={{ width: 70 }}>Order</th>
+                  <th style={{ width: 110 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {types.map(t => (
+                  <tr key={t.id}>
+                    <td>
+                      {editId === t.id
+                        ? <input autoFocus value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} style={{ fontSize: 13 }} />
+                        : <span style={{ fontWeight: 500 }}>{t.name}</span>}
+                    </td>
+                    <td>
+                      {editId === t.id
+                        ? <input type="number" value={editForm.sort_order} onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))} style={{ fontSize: 13, width: 60 }} />
+                        : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.sort_order}</span>}
+                    </td>
+                    <td>
+                      {editId === t.id
+                        ? <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleUpdate(t.id)} disabled={saving}>✓</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
+                          </div>
+                        : <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(t.id); setEditForm({ name: t.name, sort_order: t.sort_order }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(t.id)}>✕</button>
                           </div>}
                     </td>
                   </tr>

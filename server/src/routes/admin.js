@@ -402,26 +402,100 @@ router.delete('/models/:id', async (req, res) => {
 // still in the table for backward-compat with existing rows but are no longer used
 // by new bulletins.
 
+// ─── Component Types ─────────────────────────────────────────────────────────
+
+router.get('/component-types', async (_req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_component_types ORDER BY sort_order, name');
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.post('/component-types', async (req, res) => {
+  const { name, sort_order = 0 } = req.body || {};
+  if (!String(name || '').trim()) return res.status(400).json({ error: 'name is required' });
+  try {
+    const r = await query('INSERT INTO fleet_component_types (name, sort_order) VALUES (?, ?)', [String(name).trim(), sort_order]);
+    const rows = await query('SELECT * FROM fleet_component_types WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A component type with this name already exists' });
+    console.error(err); res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/component-types/:id', async (req, res) => {
+  const { name, sort_order } = req.body || {};
+  try {
+    if (name !== undefined) {
+      await query('UPDATE fleet_component_types SET name = ?, sort_order = ? WHERE id = ?',
+        [String(name).trim(), sort_order ?? 0, req.params.id]);
+    }
+    const rows = await query('SELECT * FROM fleet_component_types WHERE id = ?', [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A component type with this name already exists' });
+    console.error(err); res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/component-types/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_component_types WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── Bulletin helpers ─────────────────────────────────────────────────────────
+
 // Helper: recompute the affected-aircraft list from the bulletin's config-option
-// links. Existing fleet_bulletin_aircraft rows are preserved when re-running
-// (so resolved sign-offs aren't wiped), only INSERT IGNORE is used.
+// links AND serial-number criteria. Existing resolved rows are preserved.
 async function recomputeAffectedAircraft(bulletinId) {
-  // Find every aircraft that has any of this bulletin's affected config options
-  const matches = await query(
+  const aircraftIds = new Set();
+
+  // 1) Match by config options
+  const optMatches = await query(
     `SELECT DISTINCT fac.aircraft_id
        FROM fleet_bulletin_config_options bco
        JOIN fleet_aircraft_config fac ON fac.option_id = bco.option_id
       WHERE bco.bulletin_id = ?`,
     [bulletinId]
   );
-  for (const m of matches) {
+  for (const m of optMatches) aircraftIds.add(m.aircraft_id);
+
+  // 2) Match by serial criteria
+  const criteria = await query(
+    'SELECT * FROM fleet_bulletin_serial_criteria WHERE bulletin_id = ?',
+    [bulletinId]
+  );
+  for (const c of criteria) {
+    let q = `SELECT DISTINCT aircraft_id FROM fleet_serial_numbers
+             WHERE uninstalled = FALSE AND component_type = ?`;
+    const params = [c.component_type];
+    if (c.component_name) { q += ` AND component_name LIKE ?`; params.push(`%${c.component_name}%`); }
+    if (c.exact_serial) {
+      q += ` AND serial_number = ?`; params.push(c.exact_serial);
+    } else if (c.serial_from || c.serial_to) {
+      if (c.serial_from && c.serial_to) {
+        q += ` AND CAST(serial_number AS UNSIGNED) BETWEEN CAST(? AS UNSIGNED) AND CAST(? AS UNSIGNED)`;
+        params.push(c.serial_from, c.serial_to);
+      } else if (c.serial_from) {
+        q += ` AND CAST(serial_number AS UNSIGNED) >= CAST(? AS UNSIGNED)`; params.push(c.serial_from);
+      } else {
+        q += ` AND CAST(serial_number AS UNSIGNED) <= CAST(? AS UNSIGNED)`; params.push(c.serial_to);
+      }
+    }
+    const serialMatches = await query(q, params);
+    for (const m of serialMatches) aircraftIds.add(m.aircraft_id);
+  }
+
+  for (const aircraft_id of aircraftIds) {
     await query(
-      `INSERT IGNORE INTO fleet_bulletin_aircraft (bulletin_id, aircraft_id, serial_id)
-       VALUES (?, ?, NULL)`,
-      [bulletinId, m.aircraft_id]
+      `INSERT IGNORE INTO fleet_bulletin_aircraft (bulletin_id, aircraft_id, serial_id) VALUES (?, ?, NULL)`,
+      [bulletinId, aircraft_id]
     );
   }
-  return matches.length;
+  return aircraftIds.size;
 }
 
 // GET /api/admin/bulletins
@@ -477,10 +551,15 @@ router.get('/bulletins/:id', async (req, res) => {
         WHERE bco.bulletin_id = ?`,
       [req.params.id]
     );
+    const serialCriteria = await query(
+      'SELECT * FROM fleet_bulletin_serial_criteria WHERE bulletin_id = ? ORDER BY id',
+      [req.params.id]
+    );
     res.json({
       ...rows[0],
       affected_options: options,
       affected_option_ids: options.map(o => o.id),
+      serial_criteria: serialCriteria,
     });
   } catch (err) {
     console.error(err);
@@ -496,6 +575,7 @@ router.post('/bulletins', async (req, res) => {
     category = 'optional',
     what_to_do,
     affected_option_ids = [],
+    serial_criteria = [],
   } = req.body || {};
   if (!String(title || '').trim()) {
     return res.status(400).json({ error: 'title is required' });
@@ -507,21 +587,18 @@ router.post('/bulletins', async (req, res) => {
     const result = await query(
       `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by, serial_prefix)
        VALUES (?, ?, ?, ?, ?, '')`,
-      [
-        String(title).trim(),
-        category,
-        reason || null,
-        what_to_do || null,
-        req.user.id,
-      ]
+      [String(title).trim(), category, reason || null, what_to_do || null, req.user.id]
     );
     const bulletinId = result.insertId;
-    // Link config options + compute affected aircraft
     for (const oid of affected_option_ids) {
       if (oid == null) continue;
+      await query(`INSERT IGNORE INTO fleet_bulletin_config_options (bulletin_id, option_id) VALUES (?, ?)`, [bulletinId, Number(oid)]);
+    }
+    for (const c of serial_criteria) {
+      if (!c.component_type) continue;
       await query(
-        `INSERT IGNORE INTO fleet_bulletin_config_options (bulletin_id, option_id) VALUES (?, ?)`,
-        [bulletinId, Number(oid)]
+        `INSERT INTO fleet_bulletin_serial_criteria (bulletin_id, component_type, component_name, serial_from, serial_to, exact_serial) VALUES (?,?,?,?,?,?)`,
+        [bulletinId, c.component_type, c.component_name || null, c.serial_from || null, c.serial_to || null, c.exact_serial || null]
       );
     }
     const matchedCount = await recomputeAffectedAircraft(bulletinId);
@@ -573,6 +650,20 @@ router.put('/bulletins/:id', async (req, res) => {
           [req.params.id, Number(oid)]
         );
       }
+    }
+    // If serial criteria were passed, replace them
+    const { serial_criteria } = req.body || {};
+    if (Array.isArray(serial_criteria)) {
+      await query('DELETE FROM fleet_bulletin_serial_criteria WHERE bulletin_id = ?', [req.params.id]);
+      for (const c of serial_criteria) {
+        if (!c.component_type) continue;
+        await query(
+          `INSERT INTO fleet_bulletin_serial_criteria (bulletin_id, component_type, component_name, serial_from, serial_to, exact_serial) VALUES (?,?,?,?,?,?)`,
+          [req.params.id, c.component_type, c.component_name || null, c.serial_from || null, c.serial_to || null, c.exact_serial || null]
+        );
+      }
+    }
+    if (Array.isArray(affected_option_ids) || Array.isArray(serial_criteria)) {
       await recomputeAffectedAircraft(req.params.id);
     }
 

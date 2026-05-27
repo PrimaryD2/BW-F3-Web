@@ -86,6 +86,19 @@ router.post('/change-password', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/auth/users — active user list for dropdowns (any authenticated user)
+router.get('/users', authenticateToken, async (req, res) => {
+  try {
+    const rows = await query(
+      'SELECT id, name, role FROM users WHERE active = 1 ORDER BY name ASC'
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('GET /auth/users error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/auth/verify-password — used for sign-off password re-entry
 router.post('/verify-password', authenticateToken, async (req, res) => {
   const { password } = req.body;

@@ -13,8 +13,9 @@ import {
   createFleetPlannedMaintenance, updateFleetPlannedMaintenance, deleteFleetServiceRecord, getFleetModels,
   getFleetEventTypes,
   uploadFleetPaperwork, updateFleetPaperwork, deleteFleetPaperwork, paperworkDownloadUrl,
-  getUsers,
+  getActiveUsers,
   resolveFleetBulletinAircraft,
+  getComponentTypes,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -910,7 +911,10 @@ function MaintenanceTab({
                 const allRecords = recordsByTemplate[t.id] || [];
                 const isOpen = openForm === t.id;
                 const state = getMaintenanceStateFixed(t, allRecords, serviceTemplates);
-                const hasOpenPlan = openPlannedItems.some(item => Number(item.template_id) === Number(t.id));
+                const hasOpenPlan = openPlannedItems.some(pm =>
+                  Number(pm.template_id) === Number(t.id) ||
+                  (pm.items || []).some(it => Number(it.template_id) === Number(t.id))
+                );
 
                 return (
                   <div key={t.id} className="card" style={{ padding: 0 }}>
@@ -1149,6 +1153,9 @@ export default function FleetDetail() {
   // Event types (dynamic, from DB)
   const [eventTypes, setEventTypes] = useState([]);
 
+  // Component types for serial-number Type dropdown
+  const [componentTypes, setComponentTypes] = useState([]);
+
   // Contact modal
   const [cModal, setCModal] = useState(null);
 
@@ -1202,20 +1209,23 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes, tmplRes, etRes, modelRes, usersRes] = await Promise.all([
+      const [res, optsRes, tmplRes, etRes, modelRes, usersRes, ctRes] = await Promise.allSettled([
         getFleetAircraft(id),
         getFleetConfigOptions(),
         getFleetServiceTemplates(),
         getFleetEventTypes(),
         getFleetModels(),
-        getUsers(),
+        getActiveUsers(),
+        getComponentTypes(),
       ]);
-      setConfigOptions(optsRes.data || []);
-      setServiceTemplates((tmplRes.data || []).filter(t => t.active));
-      setEventTypes(etRes.data || []);
-      setModels((modelRes.data || []).map(item => item.name));
-      setUsers(usersRes.data || []);
-      applyData(res.data);
+      if (optsRes.status === 'fulfilled')  setConfigOptions(optsRes.value.data || []);
+      if (tmplRes.status === 'fulfilled')  setServiceTemplates((tmplRes.value.data || []).filter(t => t.active));
+      if (etRes.status === 'fulfilled')    setEventTypes(etRes.value.data || []);
+      if (modelRes.status === 'fulfilled') setModels((modelRes.value.data || []).map(item => item.name));
+      if (usersRes.status === 'fulfilled') setUsers(usersRes.value.data || []);
+      if (ctRes.status === 'fulfilled')    setComponentTypes(ctRes.value.data || []);
+      if (res.status === 'fulfilled')      applyData(res.value.data);
+      else throw new Error('Failed to load aircraft');
     } finally {
       setLoading(false);
     }
@@ -2132,12 +2142,22 @@ export default function FleetDetail() {
                         />
                       </FormField>
                       <FormField label="Type *">
-                        <input
-                          value={newSerial.component_type}
-                          onChange={e => setNewSerial(n => ({ ...n, component_type: e.target.value }))}
-                          placeholder="e.g. Avionics, Engine"
-                          required
-                        />
+                        {componentTypes.length === 0 ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 0', fontStyle: 'italic' }}>
+                            No types defined — add them in <strong>Admin → Component Types</strong>.
+                          </div>
+                        ) : (
+                          <select
+                            value={newSerial.component_type}
+                            onChange={e => setNewSerial(n => ({ ...n, component_type: e.target.value }))}
+                            required
+                          >
+                            <option value="">— Select type —</option>
+                            {componentTypes.map(ct => (
+                              <option key={ct.id} value={ct.name}>{ct.name}</option>
+                            ))}
+                          </select>
+                        )}
                       </FormField>
                       <FormField label="Serial number">
                         <input
