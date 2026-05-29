@@ -591,6 +591,8 @@ const ALTER_STMTS = [
    )`,
   // Per-item assigned technician
   `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
+  // Component manufacturing / overhaul date
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS manufacturing_date DATE NULL`,
   // Bulletin serial criteria (match by component type + serial number range/exact)
   `CREATE TABLE IF NOT EXISTS fleet_bulletin_serial_criteria (
      id INT AUTO_INCREMENT PRIMARY KEY,

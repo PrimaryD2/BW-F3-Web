@@ -1162,10 +1162,13 @@ export default function FleetDetail() {
   // Serial add row (most fields are optional — only component + type are required)
   const EMPTY_SERIAL = {
     component: '', component_type: '', component_name: '',
-    serial_number: '', date_installed: '', expiry_date: '', repack_date: '',
+    serial_number: '', manufacturing_date: '', date_installed: '', expiry_date: '', repack_date: '',
     software_version: '', system_id: '', password: '',
     notes: '',
   };
+  const [serialSearch,    setSerialSearch]    = useState('');
+  const [serialSortField, setSerialSortField] = useState('component_name');
+  const [serialSortDir,   setSerialSortDir]   = useState('asc');
   const [newSerial,    setNewSerial]    = useState(EMPTY_SERIAL);
   const [addingSerial, setAddingSerial] = useState(false);
   const [serialSaving, setSerialSaving] = useState(false);
@@ -1383,6 +1386,7 @@ export default function FleetDetail() {
       component_type: serial.component_type || '',
       component_name: serial.component_name || '',
       serial_number: serial.serial_number || '',
+      manufacturing_date: serial.manufacturing_date ? serial.manufacturing_date.slice(0, 10) : '',
       date_installed: serial.date_installed ? serial.date_installed.slice(0, 10) : '',
       expiry_date: serial.expiry_date ? serial.expiry_date.slice(0, 10) : '',
       repack_date: serial.repack_date ? serial.repack_date.slice(0, 10) : '',
@@ -2029,10 +2033,23 @@ export default function FleetDetail() {
       {tab === 'Components' && (
         <>
         {(() => {
-          // Split active vs uninstalled. Uninstalled components are preserved
-          // so the user can see the full history of what was on the aircraft.
-          const activeComponents      = serials.filter(s => !s.uninstalled);
-          const uninstalledComponents = serials.filter(s =>  s.uninstalled);
+          // Split active vs uninstalled, then apply search + sort
+          const q = serialSearch.toLowerCase();
+          function matchSerial(s) {
+            if (!q) return true;
+            return [s.component_name, s.component, s.component_type, s.serial_number, s.notes]
+              .some(v => v && String(v).toLowerCase().includes(q));
+          }
+          function sortSerials(list) {
+            return [...list].sort((a, b) => {
+              const av = (a[serialSortField] ?? '') + '';
+              const bv = (b[serialSortField] ?? '') + '';
+              const cmp = av.localeCompare(bv, undefined, { numeric: true });
+              return serialSortDir === 'asc' ? cmp : -cmp;
+            });
+          }
+          const activeComponents      = sortSerials(serials.filter(s => !s.uninstalled).filter(matchSerial));
+          const uninstalledComponents = sortSerials(serials.filter(s =>  s.uninstalled).filter(matchSerial));
 
           // Helper: render a labelled field row only when there's a value.
           function Field({ label, value, mono, children }) {
@@ -2078,10 +2095,11 @@ export default function FleetDetail() {
                     </span>
                   </Field>
                 )}
-                <Field label="Installed"  value={s.date_installed ? new Date(s.date_installed).toLocaleDateString() : ''} />
-                <Field label="Expiry"     value={s.expiry_date    ? new Date(s.expiry_date).toLocaleDateString()    : ''} />
-                <Field label="Repack"     value={s.repack_date    ? new Date(s.repack_date).toLocaleDateString()    : ''} />
-                <Field label="Notes"      value={s.notes} />
+                <Field label="Manufactured"  value={s.manufacturing_date ? new Date(s.manufacturing_date).toLocaleDateString() : ''} />
+                <Field label="Installed"     value={s.date_installed     ? new Date(s.date_installed).toLocaleDateString()     : ''} />
+                <Field label="Expiry"        value={s.expiry_date        ? new Date(s.expiry_date).toLocaleDateString()        : ''} />
+                <Field label="Repack/Test"   value={s.repack_date        ? new Date(s.repack_date).toLocaleDateString()        : ''} />
+                <Field label="Notes"         value={s.notes} />
 
                 {/* Uninstall details — only on uninstalled cards */}
                 {isUninstalled && (
@@ -2117,12 +2135,38 @@ export default function FleetDetail() {
 
           return (
             <>
-              {/* Active Components header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontWeight: 700 }}>Active Components <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>({activeComponents.length})</span></div>
+              {/* Search + sort controls */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+                <input
+                  style={{ flex: '1 1 180px', maxWidth: 280 }}
+                  placeholder="Search components…"
+                  value={serialSearch}
+                  onChange={e => setSerialSearch(e.target.value)}
+                />
+                <select
+                  style={{ flex: '0 0 160px' }}
+                  value={serialSortField}
+                  onChange={e => setSerialSortField(e.target.value)}
+                >
+                  <option value="component_type">Sort by Type</option>
+                  <option value="component_name">Sort A–Z (Name)</option>
+                  <option value="date_installed">Sort by Installed</option>
+                  <option value="expiry_date">Sort by Expiry</option>
+                </select>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setSerialSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                  title="Toggle sort direction"
+                >
+                  {serialSortDir === 'asc' ? '↑ A–Z' : '↓ Z–A'}
+                </button>
                 {canEditComponents && !addingSerial && (
-                  <button className="btn btn-primary btn-sm" onClick={() => setAddingSerial(true)}>+ Add Component</button>
+                  <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setAddingSerial(true)}>+ Add Component</button>
                 )}
+              </div>
+              {/* Active Components header */}
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                Active Components <span style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>({activeComponents.length})</span>
               </div>
 
               {/* Add / Edit form */}
@@ -2188,13 +2232,16 @@ export default function FleetDetail() {
                           autoComplete="off"
                         />
                       </FormField>
+                      <FormField label="Manufacturing date">
+                        <input type="date" value={newSerial.manufacturing_date} onChange={e => setNewSerial(n => ({ ...n, manufacturing_date: e.target.value }))} />
+                      </FormField>
                       <FormField label="Date installed">
                         <input type="date" value={newSerial.date_installed} onChange={e => setNewSerial(n => ({ ...n, date_installed: e.target.value }))} />
                       </FormField>
                       <FormField label="Expiry date">
                         <input type="date" value={newSerial.expiry_date} onChange={e => setNewSerial(n => ({ ...n, expiry_date: e.target.value }))} />
                       </FormField>
-                      <FormField label="Repack date">
+                      <FormField label="Repack/Test date">
                         <input type="date" value={newSerial.repack_date} onChange={e => setNewSerial(n => ({ ...n, repack_date: e.target.value }))} />
                       </FormField>
                       <div style={{ gridColumn: '1 / -1' }}>

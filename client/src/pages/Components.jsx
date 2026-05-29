@@ -18,11 +18,12 @@ export default function Components() {
   const [loading,        setLoading]       = useState(true);
 
   // Filters
-  const [typeFilter,   setTypeFilter]   = useState('');
-  const [search,       setSearch]       = useState('');
-  const [sortField,    setSortField]    = useState('component_type');
-  const [sortDir,      setSortDir]      = useState('asc');  // 'asc' | 'desc'
-  const [showInstalled, setShowInstalled] = useState(true);
+  const [typeFilter,     setTypeFilter]     = useState('');
+  const [aircraftFilter, setAircraftFilter] = useState('');
+  const [search,         setSearch]         = useState('');
+  const [sortField,      setSortField]      = useState('bw_serial');
+  const [sortDir,        setSortDir]        = useState('asc');  // 'asc' | 'desc'
+  const [showInstalled,   setShowInstalled]   = useState(true);
   const [showUninstalled, setShowUninstalled] = useState(false);
 
   useEffect(() => {
@@ -43,10 +44,20 @@ export default function Components() {
       .finally(() => setLoading(false));
   }, [typeFilter, search]);
 
+  // Build aircraft list for dropdown from loaded rows
+  const aircraftOptions = useMemo(() => {
+    const seen = new Map();
+    for (const r of rows) {
+      if (!seen.has(r.aircraft_id)) seen.set(r.aircraft_id, { id: r.aircraft_id, bw_serial: r.bw_serial, registration: r.registration });
+    }
+    return [...seen.values()].sort((a, b) => (a.bw_serial || '').localeCompare(b.bw_serial || '', undefined, { numeric: true }));
+  }, [rows]);
+
   const sorted = useMemo(() => {
     let list = rows.filter(r => {
       if (!showInstalled && !r.uninstalled_at) return false;
       if (!showUninstalled && r.uninstalled_at) return false;
+      if (aircraftFilter && String(r.aircraft_id) !== aircraftFilter) return false;
       return true;
     });
 
@@ -57,7 +68,7 @@ export default function Components() {
     });
 
     return list;
-  }, [rows, sortField, sortDir, showInstalled, showUninstalled]);
+  }, [rows, sortField, sortDir, showInstalled, showUninstalled, aircraftFilter]);
 
   function toggleSort(field) {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -114,7 +125,6 @@ export default function Components() {
               {ct.name} {typeCounts[ct.name] ? `(${typeCounts[ct.name]})` : ''}
             </option>
           ))}
-          {/* Also show types present in data that aren't in defined types */}
           {Object.keys(typeCounts)
             .filter(t => !componentTypes.some(ct => ct.name === t))
             .sort()
@@ -122,6 +132,19 @@ export default function Components() {
               <option key={t} value={t}>{t} ({typeCounts[t]})</option>
             ))
           }
+        </select>
+
+        <select
+          style={{ flex: '0 0 190px' }}
+          value={aircraftFilter}
+          onChange={e => setAircraftFilter(e.target.value)}
+        >
+          <option value="">All Aircraft</option>
+          {aircraftOptions.map(a => (
+            <option key={a.id} value={String(a.id)}>
+              BW-{a.bw_serial}{a.registration ? ` · ${a.registration}` : ''}
+            </option>
+          ))}
         </select>
 
         <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -190,8 +213,17 @@ export default function Components() {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map(r => (
-                  <tr key={r.id} style={{ opacity: r.uninstalled_at ? 0.55 : 1 }}>
+                {sorted.map((r, idx) => {
+                  const showGroupHeader = sortField === 'bw_serial' && (idx === 0 || sorted[idx - 1].aircraft_id !== r.aircraft_id);
+                  return (<React.Fragment key={r.id}>
+                  {showGroupHeader && (
+                    <tr>
+                      <td colSpan={8} style={{ background: 'var(--bg-hover)', fontWeight: 700, fontSize: 12, padding: '6px 12px', borderTop: idx === 0 ? 'none' : '2px solid var(--border)' }}>
+                        BW-{r.bw_serial}{r.registration ? ` · ${r.registration}` : ''}
+                      </td>
+                    </tr>
+                  )}
+                  <tr style={{ opacity: r.uninstalled_at ? 0.55 : 1 }}>
                     <td>
                       <Link
                         to={`/fleet/${r.aircraft_id}`}
@@ -250,7 +282,8 @@ export default function Components() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  </React.Fragment>);
+                })}
               </tbody>
             </table>
           </div>

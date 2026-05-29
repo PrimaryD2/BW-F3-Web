@@ -530,6 +530,21 @@ export default function PlannedMaintenance() {
     const plannedDate   = fmtDate(pm.planned_arrival_date || pm.planned_date);
     const completedDate = fmtDate(pm.completed_date);
     const now = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const origin = window.location.origin;
+
+    // Build photos section — group by item, only items that have photos
+    const itemsWithPhotos = (pm.items || []).filter(it => it.photos && it.photos.length > 0);
+    const photosSection = itemsWithPhotos.length > 0 ? `
+<h2>Work Photos</h2>
+${itemsWithPhotos.map(it => `
+  <div class="photo-group">
+    <div class="photo-group-title">${esc(it.title || it.template_title || 'Item')}</div>
+    <div class="photo-grid">
+      ${it.photos.map(p => `<img src="${origin}/uploads/fleet/${p.filename}" alt="${esc(p.caption || '')}">`).join('')}
+    </div>
+  </div>
+`).join('')}
+` : '';
 
     const html = `<!DOCTYPE html>
 <html lang="en">
@@ -576,6 +591,11 @@ export default function PlannedMaintenance() {
   .signoff-cell label { font-size: 9px; font-weight: 700; text-transform: uppercase;
                         letter-spacing: 0.06em; color: #999; display: block; margin-bottom: 2px; }
   .signoff-cell .val { font-size: 12px; font-weight: 600; }
+  /* ── Photos grid ── */
+  .photo-group { margin-bottom: 14px; }
+  .photo-group-title { font-size: 10px; font-weight: 700; color: #555; margin-bottom: 6px; }
+  .photo-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .photo-grid img { width: 180px; height: 140px; object-fit: cover; border: 1px solid #ddd; border-radius: 4px; page-break-inside: avoid; }
   /* ── Signature lines ── */
   .sig-row { display: grid; grid-template-columns: 1fr 1fr; gap: 50px; margin-top: 38px; }
   .sig-line { margin-top: 50px; border-top: 1px solid #333; padding-top: 5px; font-size: 10px; color: #666; }
@@ -632,6 +652,8 @@ ${pm.additional_work ? `
 <h2>Additional Work</h2>
 <div class="extra-box">${esc(pm.additional_work)}</div>
 ` : ''}
+
+${photosSection}
 
 <h2>Sign-off &amp; Authorization</h2>
 <div class="signoff-grid">
@@ -1083,6 +1105,21 @@ ${pm.signoff_notes ? `
                           )}
                           {pm.additional_work && (
                             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Extra: {pm.additional_work}</div>
+                          )}
+                          {/* Photos for completed records */}
+                          {(pm.items || []).some(it => it.photos && it.photos.length > 0) && (
+                            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {(pm.items || []).flatMap(it => (it.photos || []).map(p => ({ ...p, itemTitle: it.title || it.template_title }))).map(photo => (
+                                <img
+                                  key={photo.id}
+                                  src={`/uploads/fleet/${photo.filename}`}
+                                  alt={photo.itemTitle || 'Work photo'}
+                                  title={photo.itemTitle || photo.caption || 'Click to open'}
+                                  style={{ width: 72, height: 56, objectFit: 'cover', borderRadius: 5, border: '1px solid var(--border)', cursor: 'pointer', flexShrink: 0 }}
+                                  onClick={e => { e.stopPropagation(); window.open(`/uploads/fleet/${photo.filename}`, '_blank'); }}
+                                />
+                              ))}
+                            </div>
                           )}
                         </div>
 
