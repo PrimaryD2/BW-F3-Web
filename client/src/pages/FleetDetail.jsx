@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 import {
   getFleetAircraft, updateFleetAircraft,
   addFleetContact, updateFleetContact, deleteFleetContact,
@@ -16,6 +17,7 @@ import {
   getActiveUsers,
   resolveFleetBulletinAircraft,
   getComponentTypes,
+  getFleetComponentNames,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -1153,8 +1155,9 @@ export default function FleetDetail() {
   // Event types (dynamic, from DB)
   const [eventTypes, setEventTypes] = useState([]);
 
-  // Component types for serial-number Type dropdown
+  // Component types + names for serial-number dropdowns
   const [componentTypes, setComponentTypes] = useState([]);
+  const [componentNames, setComponentNames] = useState([]); // { id, component_type, name }
 
   // Contact modal
   const [cModal, setCModal] = useState(null);
@@ -1174,6 +1177,7 @@ export default function FleetDetail() {
   const [serialSaving, setSerialSaving] = useState(false);
   const [editingSerialId, setEditingSerialId] = useState(null);
   const [revealedPasswords, setRevealedPasswords] = useState({}); // { [serialId]: bool }
+  const [versionLogSerial,  setVersionLogSerial]  = useState(null); // serial object for version log modal
   // Uninstall modal state
   const [uninstallTarget, setUninstallTarget] = useState(null); // serial object being uninstalled
   const EMPTY_UNINSTALL = { uninstalled_at: '', uninstall_reason: '', uninstall_tsn: '', uninstall_technician: '', uninstall_notes: '' };
@@ -1212,7 +1216,7 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes, tmplRes, etRes, modelRes, usersRes, ctRes] = await Promise.allSettled([
+      const [res, optsRes, tmplRes, etRes, modelRes, usersRes, ctRes, cnRes] = await Promise.allSettled([
         getFleetAircraft(id),
         getFleetConfigOptions(),
         getFleetServiceTemplates(),
@@ -1220,6 +1224,7 @@ export default function FleetDetail() {
         getFleetModels(),
         getActiveUsers(),
         getComponentTypes(),
+        getFleetComponentNames(),
       ]);
       if (optsRes.status === 'fulfilled')  setConfigOptions(optsRes.value.data || []);
       if (tmplRes.status === 'fulfilled')  setServiceTemplates((tmplRes.value.data || []).filter(t => t.active));
@@ -1227,6 +1232,7 @@ export default function FleetDetail() {
       if (modelRes.status === 'fulfilled') setModels((modelRes.value.data || []).map(item => item.name));
       if (usersRes.status === 'fulfilled') setUsers(usersRes.value.data || []);
       if (ctRes.status === 'fulfilled')    setComponentTypes(ctRes.value.data || []);
+      if (cnRes.status === 'fulfilled')    setComponentNames(cnRes.value.data || []);
       if (res.status === 'fulfilled')      applyData(res.value.data);
       else throw new Error('Failed to load aircraft');
     } finally {
@@ -1428,6 +1434,52 @@ export default function FleetDetail() {
       await deleteFleetSerial(id, sid);
       setSerials(s => s.filter(x => x.id !== sid));
     } catch { toast.error('Delete failed'); }
+  }
+
+  // ─── Export components to Excel ───────────────────────────────────────────
+
+  function exportComponentsExcel() {
+    const fmt = (d) => d ? new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB') : '';
+
+    // Build rows for ALL components (active + uninstalled)
+    const allComponents = [...serials].sort((a, b) => {
+      // Active first, then by type, then by name
+      if (a.uninstalled !== b.uninstalled) return a.uninstalled ? 1 : -1;
+      return (a.component_type || '').localeCompare(b.component_type || '') ||
+             (a.component_name || a.component || '').localeCompare(b.component_name || b.component || '');
+    });
+
+    const rows = allComponents.map(s => ({
+      'Component Name':    s.component_name || s.component || '',
+      'Type':              s.component_type || '',
+      'Serial Number':     s.serial_number  || '',
+      'System ID':         s.system_id      || '',
+      'Software Version':  s.software_version || '',
+      'Manufactured':      fmt(s.manufacturing_date),
+      'Installed':         fmt(s.date_installed),
+      'Expiry Date':       fmt(s.expiry_date),
+      'Repack/Test Date':  fmt(s.repack_date),
+      'Status':            s.uninstalled ? 'Uninstalled' : 'Installed',
+      'Uninstalled Date':  fmt(s.uninstalled_at),
+      'Uninstall Reason':  s.uninstall_reason  || '',
+      'TSN at Removal':    s.uninstall_tsn != null ? Number(s.uninstall_tsn).toFixed(1) : '',
+      'Uninstall Tech.':   s.uninstall_technician || '',
+      'Notes':             s.notes || '',
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+
+    // Column widths
+    ws['!cols'] = [
+      { wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 18 }, { wch: 20 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+      { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 28 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const sheetName = `BW-${aircraft?.bw_serial || 'Components'}`;
+    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31)); // Excel sheet name limit
+    XLSX.writeFile(wb, `Components_BW-${aircraft?.bw_serial || 'Aircraft'}_${new Date().toISOString().slice(0,10)}.xlsx`);
   }
 
   // ─── Paints ────────────────────────────────────────────────────────────────
@@ -2101,6 +2153,19 @@ export default function FleetDetail() {
                 <Field label="Repack/Test"   value={s.repack_date        ? new Date(s.repack_date).toLocaleDateString()        : ''} />
                 <Field label="Notes"         value={s.notes} />
 
+                {/* Software version history button */}
+                {s.version_logs && s.version_logs.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 11, padding: '2px 8px' }}
+                      onClick={() => setVersionLogSerial(s)}
+                    >
+                      🕐 SW Version History ({s.version_logs.length})
+                    </button>
+                  </div>
+                )}
+
                 {/* Uninstall details — only on uninstalled cards */}
                 {isUninstalled && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
@@ -2160,8 +2225,18 @@ export default function FleetDetail() {
                 >
                   {serialSortDir === 'asc' ? '↑ A–Z' : '↓ Z–A'}
                 </button>
+                {serials.length > 0 && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ marginLeft: canEditComponents && !addingSerial ? 0 : 'auto' }}
+                    onClick={exportComponentsExcel}
+                    title="Export to Excel"
+                  >
+                    ⬇ Export Excel
+                  </button>
+                )}
                 {canEditComponents && !addingSerial && (
-                  <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setAddingSerial(true)}>+ Add Component</button>
+                  <button className="btn btn-primary btn-sm" style={{ marginLeft: serials.length > 0 ? 0 : 'auto' }} onClick={() => setAddingSerial(true)}>+ Add Component</button>
                 )}
               </div>
               {/* Active Components header */}
@@ -2178,13 +2253,6 @@ export default function FleetDetail() {
                   </p>
                   <form onSubmit={handleAddSerial}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                      <FormField label="Component name *">
-                        <input
-                          value={newSerial.component_name}
-                          onChange={e => setNewSerial(n => ({ ...n, component_name: e.target.value, component: e.target.value }))}
-                          autoFocus required
-                        />
-                      </FormField>
                       <FormField label="Type *">
                         {componentTypes.length === 0 ? (
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 0', fontStyle: 'italic' }}>
@@ -2193,7 +2261,7 @@ export default function FleetDetail() {
                         ) : (
                           <select
                             value={newSerial.component_type}
-                            onChange={e => setNewSerial(n => ({ ...n, component_type: e.target.value }))}
+                            onChange={e => setNewSerial(n => ({ ...n, component_type: e.target.value, component_name: '', component: '' }))}
                             required
                           >
                             <option value="">— Select type —</option>
@@ -2202,6 +2270,33 @@ export default function FleetDetail() {
                             ))}
                           </select>
                         )}
+                      </FormField>
+                      <FormField label="Component name *">
+                        {(() => {
+                          const namesForType = componentNames.filter(cn => cn.component_type === newSerial.component_type);
+                          if (!newSerial.component_type || namesForType.length === 0) {
+                            return (
+                              <input
+                                value={newSerial.component_name}
+                                onChange={e => setNewSerial(n => ({ ...n, component_name: e.target.value, component: e.target.value }))}
+                                placeholder={newSerial.component_type ? 'No names defined for this type yet — type manually' : 'Select a type first'}
+                                required
+                              />
+                            );
+                          }
+                          return (
+                            <select
+                              value={newSerial.component_name}
+                              onChange={e => setNewSerial(n => ({ ...n, component_name: e.target.value, component: e.target.value }))}
+                              required
+                            >
+                              <option value="">— Select component —</option>
+                              {namesForType.map(cn => (
+                                <option key={cn.id} value={cn.name}>{cn.name}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
                       </FormField>
                       <FormField label="Serial number">
                         <input
@@ -2957,6 +3052,43 @@ export default function FleetDetail() {
               >
                 {uninstallSaving ? 'Saving…' : '⏏ Uninstall Component'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SW Version Log Modal ────────────────────────────────────────────── */}
+      {versionLogSerial && (
+        <div className="modal-overlay" onClick={() => setVersionLogSerial(null)}>
+          <div className="modal" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">SW Version History — {versionLogSerial.component_name || versionLogSerial.component}</div>
+            <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+              Current version: <strong>{versionLogSerial.software_version || '—'}</strong>
+            </div>
+            <div className="card" style={{ padding: 0 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Date</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Previous Version</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>New Version</th>
+                    <th style={{ padding: '7px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Updated By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...versionLogSerial.version_logs].reverse().map((log, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{new Date(log.updated_at).toLocaleDateString()}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{log.old_version || '—'}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace', fontWeight: 600 }}>{log.new_version || '—'}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-secondary)' }}>{log.updated_by_name || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost" onClick={() => setVersionLogSerial(null)}>Close</button>
             </div>
           </div>
         </div>

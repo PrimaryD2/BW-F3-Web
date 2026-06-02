@@ -446,6 +446,48 @@ router.delete('/component-types/:id', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// ─── Component Names ──────────────────────────────────────────────────────────
+
+router.get('/component-names', async (_req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_component_names ORDER BY component_type, sort_order, name');
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.post('/component-names', async (req, res) => {
+  const { component_type, name, sort_order = 0 } = req.body || {};
+  if (!String(component_type || '').trim() || !String(name || '').trim())
+    return res.status(400).json({ error: 'component_type and name are required' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_component_names (component_type, name, sort_order) VALUES (?,?,?)',
+      [component_type.trim(), name.trim(), sort_order]
+    );
+    const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.put('/component-names/:id', async (req, res) => {
+  const { component_type, name, sort_order } = req.body || {};
+  try {
+    await query(
+      'UPDATE fleet_component_names SET component_type=?, name=?, sort_order=? WHERE id=?',
+      [component_type, name, sort_order ?? 0, req.params.id]
+    );
+    const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.delete('/component-names/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_component_names WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // ─── Bulletin helpers ─────────────────────────────────────────────────────────
 
 // Helper: recompute the affected-aircraft list from the bulletin's config-option

@@ -122,6 +122,16 @@ const PLANNED_MAINTENANCE_SELECT = `
 
 // ─── Components list (all serials across fleet) ──────────────────────────────
 
+// GET /api/fleet/component-names — active component names for dropdowns
+router.get('/component-names', async (_req, res) => {
+  try {
+    const rows = await query(
+      'SELECT * FROM fleet_component_names WHERE active = TRUE ORDER BY component_type, sort_order, name'
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // GET /api/fleet/components?type=Engine&search=
 router.get('/components', async (req, res) => {
   try {
@@ -733,6 +743,21 @@ router.get('/:id', async (req, res) => {
 
     const selected_config = configRows.map(r => Number(r.option_id));
 
+    // Attach software version logs to each serial
+    const serialIds = serials.map(s => s.id);
+    let versionLogsBySerial = {};
+    if (serialIds.length) {
+      const vLogs = await query(
+        `SELECT * FROM fleet_serial_version_logs WHERE serial_id IN (${serialIds.map(() => '?').join(',')}) ORDER BY updated_at ASC`,
+        serialIds
+      );
+      for (const log of vLogs) {
+        if (!versionLogsBySerial[log.serial_id]) versionLogsBySerial[log.serial_id] = [];
+        versionLogsBySerial[log.serial_id].push(log);
+      }
+    }
+    const serialsWithLogs = serials.map(s => ({ ...s, version_logs: versionLogsBySerial[s.id] || [] }));
+
     // Fetch items for planned maintenance entries
     const pmIds = plannedMaintenance.map(p => p.id);
     let pmItemsByPm = {};
@@ -755,7 +780,7 @@ router.get('/:id', async (req, res) => {
     res.json({
       ...aircraft,
       contacts,
-      serials,
+      serials: serialsWithLogs,
       events,
       images,
       bulletins,
@@ -1358,6 +1383,13 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
     sort_order,
   } = req.body;
   try {
+    // Read old software_version before updating so we can log changes
+    const [oldRow] = await query(
+      'SELECT software_version FROM fleet_serial_numbers WHERE id = ? AND aircraft_id = ?',
+      [req.params.sid, req.params.id]
+    );
+    const oldVersion = oldRow?.software_version || null;
+
     await query(
       `UPDATE fleet_serial_numbers
        SET component=?, component_type=?, component_name=?, serial_number=?,
@@ -1383,6 +1415,15 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
         req.params.id,
       ]
     );
+    // Log software version change if it changed
+    const newVersion = software_version || null;
+    if (newVersion !== oldVersion) {
+      await query(
+        'INSERT INTO fleet_serial_version_logs (serial_id, old_version, new_version, updated_by_name) VALUES (?,?,?,?)',
+        [req.params.sid, oldVersion, newVersion, req.user?.name || null]
+      );
+    }
+
     const rows = await query('SELECT * FROM fleet_serial_numbers WHERE id = ?', [req.params.sid]);
     res.json(rows[0]);
   } catch (err) {

@@ -10,11 +10,12 @@ import {
   getFleetServiceTemplates, createFleetServiceTemplate, updateFleetServiceTemplate, deleteFleetServiceTemplate,
   getFleetEventTypes, createFleetEventType, updateFleetEventType, deleteFleetEventType,
   getComponentTypes, createComponentType, updateComponentType, deleteComponentType,
+  getComponentNames, createComponentName, updateComponentName, deleteComponentName,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -52,6 +53,7 @@ export default function AdminPanel() {
       {tab === 4 && <ServiceTemplatesSection />}
       {tab === 5 && <EventTypesSection />}
       {tab === 6 && <ComponentTypesSection />}
+      {tab === 7 && <ComponentNamesSection />}
     </div>
   );
 }
@@ -2267,6 +2269,170 @@ function ComponentTypesSection() {
                         : <div style={{ display: 'flex', gap: 4 }}>
                             <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(t.id); setEditForm({ name: t.name, sort_order: t.sort_order }); }}>✎</button>
                             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(t.id)}>✕</button>
+                          </div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Component Names Section ──────────────────────────────────────────────────
+const EMPTY_CN = { component_type: '', name: '', sort_order: 0 };
+
+function ComponentNamesSection() {
+  const toast = useToast();
+  const [names,    setNames]    = useState([]);
+  const [types,    setTypes]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [addForm,  setAddForm]  = useState(EMPTY_CN);
+  const [editId,   setEditId]   = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving,   setSaving]   = useState(false);
+  const [typeFilter, setTypeFilter] = useState('');
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [nRes, tRes] = await Promise.all([getComponentNames(), getComponentTypes()]);
+      setNames(nRes.data || []);
+      setTypes(tRes.data || []);
+    } finally { setLoading(false); }
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (!addForm.component_type || !addForm.name.trim()) { toast.error('Type and name are required'); return; }
+    setSaving(true);
+    try {
+      const r = await createComponentName(addForm);
+      setNames(n => [...n, r.data]);
+      setAddForm(EMPTY_CN);
+      toast.success('Component name added');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleUpdate(id) {
+    setSaving(true);
+    try {
+      const r = await updateComponentName(id, editForm);
+      setNames(n => n.map(x => x.id === id ? r.data : x));
+      setEditId(null);
+      toast.success('Updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this component name?')) return;
+    try {
+      await deleteComponentName(id);
+      setNames(n => n.filter(x => x.id !== id));
+      toast.success('Deleted');
+    } catch { toast.error('Delete failed'); }
+  }
+
+  const filtered = typeFilter ? names.filter(n => n.component_type === typeFilter) : names;
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Component Names</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        Define component names for each type. When adding a component to an aircraft, selecting a type will show only the names defined here for that type.
+      </p>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 12 }}>Add Component Name</div>
+        <form onSubmit={handleAdd}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '0 0 180px', margin: 0 }}>
+              <label>Type *</label>
+              <select value={addForm.component_type} onChange={e => setAddForm(f => ({ ...f, component_type: e.target.value }))} required>
+                <option value="">— Select type —</option>
+                {types.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: '1 1 200px', margin: 0 }}>
+              <label>Name *</label>
+              <input value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Rotax 916iS, E-Props Glorieuse C9" required />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 70px', margin: 0 }}>
+              <label>Order</label>
+              <input type="number" value={addForm.sort_order} onChange={e => setAddForm(f => ({ ...f, sort_order: Number(e.target.value) }))} />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 auto', margin: 0 }}>
+              <label>&nbsp;</label>
+              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '…' : '+ Add'}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      {/* Filter by type */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <button className={`btn btn-sm ${typeFilter === '' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTypeFilter('')}>All</button>
+        {types.map(t => (
+          <button key={t.id} className={`btn btn-sm ${typeFilter === t.name ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTypeFilter(f => f === t.name ? '' : t.name)}>
+            {t.name} <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>({names.filter(n => n.component_type === t.name).length})</span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)' }}>Loading…</p>
+      ) : filtered.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--text-muted)' }}>
+          {typeFilter ? `No names defined for "${typeFilter}" yet.` : 'No component names yet. Add some above.'}
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 140 }}>Type</th>
+                  <th>Name</th>
+                  <th style={{ width: 70 }}>Order</th>
+                  <th style={{ width: 110 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(n => (
+                  <tr key={n.id}>
+                    <td>
+                      {editId === n.id
+                        ? <select value={editForm.component_type} onChange={e => setEditForm(f => ({ ...f, component_type: e.target.value }))} style={{ fontSize: 13 }}>
+                            {types.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                          </select>
+                        : <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{n.component_type}</span>}
+                    </td>
+                    <td>
+                      {editId === n.id
+                        ? <input autoFocus value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} style={{ fontSize: 13 }} />
+                        : <span style={{ fontWeight: 500 }}>{n.name}</span>}
+                    </td>
+                    <td>
+                      {editId === n.id
+                        ? <input type="number" value={editForm.sort_order} onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))} style={{ fontSize: 13, width: 60 }} />
+                        : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{n.sort_order}</span>}
+                    </td>
+                    <td>
+                      {editId === n.id
+                        ? <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleUpdate(n.id)} disabled={saving}>✓</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
+                          </div>
+                        : <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(n.id); setEditForm({ component_type: n.component_type, name: n.name, sort_order: n.sort_order }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(n.id)}>✕</button>
                           </div>}
                     </td>
                   </tr>

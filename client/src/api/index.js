@@ -74,6 +74,11 @@ export const getComponentTypes    = ()        => api.get('/admin/component-types
 export const createComponentType  = (d)       => api.post('/admin/component-types', d);
 export const updateComponentType  = (id, d)   => api.put(`/admin/component-types/${id}`, d);
 export const deleteComponentType  = (id)      => api.delete(`/admin/component-types/${id}`);
+export const getComponentNames    = ()        => api.get('/admin/component-names');
+export const createComponentName  = (d)       => api.post('/admin/component-names', d);
+export const updateComponentName  = (id, d)   => api.put(`/admin/component-names/${id}`, d);
+export const deleteComponentName  = (id)      => api.delete(`/admin/component-names/${id}`);
+export const getFleetComponentNames = ()      => api.get('/fleet/component-names');
 export const getFleetModelsAdmin = () => api.get('/admin/models');
 export const createFleetModel = (d) => api.post('/admin/models', d);
 export const updateFleetModel = (id, d) => api.put(`/admin/models/${id}`, d);

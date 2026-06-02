@@ -593,6 +593,27 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
   // Component manufacturing / overhaul date
   `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS manufacturing_date DATE NULL`,
+  // serial_number was originally NOT NULL but is optional (some components have no serial)
+  `ALTER TABLE fleet_serial_numbers MODIFY COLUMN serial_number VARCHAR(200) NULL`,
+  // Admin-managed component name list (per type), used as dropdown when adding components
+  `CREATE TABLE IF NOT EXISTS fleet_component_names (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     component_type VARCHAR(120) NOT NULL,
+     name VARCHAR(180) NOT NULL,
+     sort_order INT NOT NULL DEFAULT 0,
+     active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   )`,
+  // Software version change log per component serial
+  `CREATE TABLE IF NOT EXISTS fleet_serial_version_logs (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     serial_id INT NOT NULL,
+     old_version VARCHAR(120) NULL,
+     new_version VARCHAR(120) NULL,
+     updated_by_name VARCHAR(120) NULL,
+     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     FOREIGN KEY (serial_id) REFERENCES fleet_serial_numbers(id) ON DELETE CASCADE
+   )`,
   // Bulletin serial criteria (match by component type + serial number range/exact)
   `CREATE TABLE IF NOT EXISTS fleet_bulletin_serial_criteria (
      id INT AUTO_INCREMENT PRIMARY KEY,
