@@ -2,6 +2,14 @@ import React, { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+const IconDashboard = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="9"/>
+    <rect x="14" y="3" width="7" height="5"/>
+    <rect x="14" y="12" width="7" height="9"/>
+    <rect x="3" y="16" width="7" height="5"/>
+  </svg>
+);
 const IconAircrafts = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21 4 19 4c-1.5 0-2.5.5-4 2L10 8.5 3.5 8 2 9.5l6 2.5-2 3.5-2.5.5L5 17l3-1 2.5 6 1.5-1.5V19l4.5-4 2.8 5.2z"/>
@@ -43,6 +51,7 @@ const IconAdmin = () => (
 );
 
 const NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard', Icon: IconDashboard },
   { to: '/fleet', label: 'Aircrafts', Icon: IconAircrafts },
   { to: '/gallery', label: 'Gallery', Icon: IconGallery },
   { to: '/planned-maintenance', label: 'Planned Maintenance', Icon: IconMaintenance },

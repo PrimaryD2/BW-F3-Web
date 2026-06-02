@@ -612,6 +612,7 @@ router.get('/', async (_req, res) => {
         (
           SELECT COUNT(*)
           FROM fleet_bulletin_aircraft fba
+          JOIN fleet_bulletins fb ON fb.id = fba.bulletin_id
           WHERE fba.aircraft_id = fleet_aircraft.id AND fba.status = 'open'
         ) AS open_bulletin_count
        FROM fleet_aircraft
