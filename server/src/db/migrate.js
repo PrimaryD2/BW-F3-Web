@@ -593,6 +593,23 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS assigned_technician_id INT NULL`,
   // Component manufacturing / overhaul date
   `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS manufacturing_date DATE NULL`,
+  // Toe-in measurements (degrees) for left/right main gear
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS toe_in_left DECIMAL(5,2) NULL`,
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS toe_in_right DECIMAL(5,2) NULL`,
+  // Type-specific extra fields for components (JSON: propeller blades/hub/spinner, governor details, etc.)
+  `ALTER TABLE fleet_serial_numbers ADD COLUMN IF NOT EXISTS extra_data TEXT NULL`,
+  // Key-value settings store (admin-editable thresholds etc.)
+  `CREATE TABLE IF NOT EXISTS fleet_settings (
+     setting_key VARCHAR(100) NOT NULL PRIMARY KEY,
+     setting_value VARCHAR(255) NULL,
+     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+   )`,
+  // Seed default toe-in thresholds (INSERT IGNORE keeps admin overrides on re-run)
+  `INSERT IGNORE INTO fleet_settings (setting_key, setting_value) VALUES
+     ('toe_in_wheel_min', '0'),
+     ('toe_in_wheel_max', '1'),
+     ('toe_in_total_min', '0.4'),
+     ('toe_in_total_max', '2')`,
   // serial_number was originally NOT NULL but is optional (some components have no serial)
   `ALTER TABLE fleet_serial_numbers MODIFY COLUMN serial_number VARCHAR(200) NULL`,
   // Admin-managed component name list (per type), used as dropdown when adding components

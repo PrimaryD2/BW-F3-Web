@@ -79,6 +79,9 @@ export const createComponentName  = (d)       => api.post('/admin/component-name
 export const updateComponentName  = (id, d)   => api.put(`/admin/component-names/${id}`, d);
 export const deleteComponentName  = (id)      => api.delete(`/admin/component-names/${id}`);
 export const getFleetComponentNames = ()      => api.get('/fleet/component-names');
+export const getFleetSettings     = ()        => api.get('/fleet/settings');
+export const getAdminSettings     = ()        => api.get('/admin/settings');
+export const updateAdminSettings  = (d)       => api.put('/admin/settings', d);
 export const getFleetModelsAdmin = () => api.get('/admin/models');
 export const createFleetModel = (d) => api.post('/admin/models', d);
 export const updateFleetModel = (id, d) => api.put(`/admin/models/${id}`, d);

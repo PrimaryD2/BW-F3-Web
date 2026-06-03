@@ -11,11 +11,12 @@ import {
   getFleetEventTypes, createFleetEventType, updateFleetEventType, deleteFleetEventType,
   getComponentTypes, createComponentType, updateComponentType, deleteComponentType,
   getComponentNames, createComponentName, updateComponentName, deleteComponentName,
+  getAdminSettings, updateAdminSettings,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -54,6 +55,70 @@ export default function AdminPanel() {
       {tab === 5 && <EventTypesSection />}
       {tab === 6 && <ComponentTypesSection />}
       {tab === 7 && <ComponentNamesSection />}
+      {tab === 8 && <SettingsSection />}
+    </div>
+  );
+}
+
+// ─── Settings Section (toe-in thresholds etc.) ────────────────────────────────
+function SettingsSection() {
+  const toast = useToast();
+  const [form, setForm]     = useState({ toe_in_wheel_min: '', toe_in_wheel_max: '', toe_in_total_min: '', toe_in_total_max: '' });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+
+  useEffect(() => {
+    getAdminSettings()
+      .then(r => setForm(f => ({ ...f, ...r.data })))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const r = await updateAdminSettings(form);
+      setForm(f => ({ ...f, ...r.data }));
+      toast.success('Settings saved');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  if (loading) return <p style={{ color: 'var(--text-secondary)' }}>Loading…</p>;
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Toe-in Thresholds</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        Acceptable main gear toe-in ranges (in degrees). These control the green/red validation shown on each aircraft's overview.
+      </p>
+      <div className="card" style={{ maxWidth: 560 }}>
+        <form onSubmit={handleSave}>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Per Wheel (each main gear)</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Minimum (°)</label>
+              <input type="number" step="0.01" value={form.toe_in_wheel_min} onChange={e => setForm(f => ({ ...f, toe_in_wheel_min: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Maximum (°)</label>
+              <input type="number" step="0.01" value={form.toe_in_wheel_max} onChange={e => setForm(f => ({ ...f, toe_in_wheel_max: e.target.value }))} />
+            </div>
+          </div>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Total (left + right combined)</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Minimum (°)</label>
+              <input type="number" step="0.01" value={form.toe_in_total_min} onChange={e => setForm(f => ({ ...f, toe_in_total_min: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Maximum (°)</label>
+              <input type="number" step="0.01" value={form.toe_in_total_max} onChange={e => setForm(f => ({ ...f, toe_in_total_max: e.target.value }))} />
+            </div>
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Settings'}</button>
+        </form>
+      </div>
     </div>
   );
 }

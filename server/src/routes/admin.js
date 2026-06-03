@@ -488,6 +488,34 @@ router.delete('/component-names/:id', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// ─── Settings (key-value) ─────────────────────────────────────────────────────
+
+router.get('/settings', async (_req, res) => {
+  try {
+    const rows = await query('SELECT setting_key, setting_value FROM fleet_settings');
+    const out = {};
+    for (const r of rows) out[r.setting_key] = r.setting_value;
+    res.json(out);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.put('/settings', async (req, res) => {
+  const updates = req.body || {};
+  try {
+    for (const [key, value] of Object.entries(updates)) {
+      await query(
+        `INSERT INTO fleet_settings (setting_key, setting_value) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [key, value == null ? null : String(value)]
+      );
+    }
+    const rows = await query('SELECT setting_key, setting_value FROM fleet_settings');
+    const out = {};
+    for (const r of rows) out[r.setting_key] = r.setting_value;
+    res.json(out);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 // ─── Bulletin helpers ─────────────────────────────────────────────────────────
 
 // Helper: recompute the affected-aircraft list from the bulletin's config-option

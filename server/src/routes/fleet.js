@@ -97,6 +97,16 @@ function normPlannedMaintenance(item) {
   };
 }
 
+// Parse the JSON extra_data column on a serial row back into an object
+function normSerial(s) {
+  if (!s) return s;
+  let extra = {};
+  if (s.extra_data) {
+    try { extra = JSON.parse(s.extra_data); } catch { extra = {}; }
+  }
+  return { ...s, extra_data: extra };
+}
+
 const AIRCRAFT_SELECT = `
   id, fleet_number, bw_serial, aircraft_number, model, build_status,
   registration, country_code, country_name,
@@ -104,6 +114,7 @@ const AIRCRAFT_SELECT = `
   airworthiness_status, airworthiness_expiry,
   total_hours_tsn, engine_hours, prop_hours,
   next_inspection_date, next_inspection_hours,
+  toe_in_left, toe_in_right,
   customer_name, first_flight_date, delivery_date, financing_flag, serviced_by_us, notes,
   created_at, updated_at
 `;
@@ -121,6 +132,16 @@ const PLANNED_MAINTENANCE_SELECT = `
 `;
 
 // ─── Components list (all serials across fleet) ──────────────────────────────
+
+// GET /api/fleet/settings — key-value settings (toe-in thresholds etc.), any authenticated user
+router.get('/settings', async (_req, res) => {
+  try {
+    const rows = await query('SELECT setting_key, setting_value FROM fleet_settings');
+    const out = {};
+    for (const r of rows) out[r.setting_key] = r.setting_value;
+    res.json(out);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
 
 // GET /api/fleet/component-names — active component names for dropdowns
 router.get('/component-names', async (_req, res) => {
@@ -757,7 +778,7 @@ router.get('/:id', async (req, res) => {
         versionLogsBySerial[log.serial_id].push(log);
       }
     }
-    const serialsWithLogs = serials.map(s => ({ ...s, version_logs: versionLogsBySerial[s.id] || [] }));
+    const serialsWithLogs = serials.map(s => ({ ...normSerial(s), version_logs: versionLogsBySerial[s.id] || [] }));
 
     // Fetch items for planned maintenance entries
     const pmIds = plannedMaintenance.map(p => p.id);
@@ -807,6 +828,7 @@ router.put('/:id', requireRole('admin', 'supervisor'), async (req, res) => {
     'airworthiness_status', 'airworthiness_expiry',
     'total_hours_tsn', 'engine_hours', 'prop_hours',
     'next_inspection_date', 'next_inspection_hours',
+    'toe_in_left', 'toe_in_right',
     'customer_name', 'first_flight_date', 'delivery_date',
     'financing_flag', 'serviced_by_us', 'notes',
   ];
@@ -1329,19 +1351,21 @@ router.post('/:id/serials', requireRole('admin', 'supervisor'), async (req, res)
     system_id,
     password,
     notes,
+    extra_data,
     sort_order = 0,
   } = req.body;
   // Only component + type are now required (serial_number is optional too —
   // e.g. an avionics box with a system_id but no physical serial yet)
   if (!component) return res.status(400).json({ error: 'component is required' });
+  const extraJson = extra_data && Object.keys(extra_data).length ? JSON.stringify(extra_data) : null;
   try {
     const r = await query(
       `INSERT INTO fleet_serial_numbers
        (aircraft_id, component, component_type, component_name, serial_number,
         manufacturing_date, date_installed, expiry_date, repack_date,
         software_version, system_id, password,
-        notes, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        notes, extra_data, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         req.params.id,
         component,
@@ -1356,11 +1380,12 @@ router.post('/:id/serials', requireRole('admin', 'supervisor'), async (req, res)
         system_id || null,
         password || null,
         notes || null,
+        extraJson,
         sort_order,
       ]
     );
     const rows = await query('SELECT * FROM fleet_serial_numbers WHERE id = ?', [r.insertId]);
-    res.status(201).json(rows[0]);
+    res.status(201).json(normSerial(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -1381,8 +1406,10 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
     system_id,
     password,
     notes,
+    extra_data,
     sort_order,
   } = req.body;
+  const extraJson = extra_data && Object.keys(extra_data).length ? JSON.stringify(extra_data) : null;
   try {
     // Read old software_version before updating so we can log changes
     const [oldRow] = await query(
@@ -1396,7 +1423,7 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
        SET component=?, component_type=?, component_name=?, serial_number=?,
            manufacturing_date=?, date_installed=?, expiry_date=?, repack_date=?,
            software_version=?, system_id=?, password=?,
-           notes=?, sort_order=?
+           notes=?, extra_data=?, sort_order=?
        WHERE id=? AND aircraft_id=?`,
       [
         component,
@@ -1411,6 +1438,7 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
         system_id || null,
         password || null,
         notes || null,
+        extraJson,
         sort_order ?? 0,
         req.params.sid,
         req.params.id,
@@ -1426,7 +1454,7 @@ router.put('/:id/serials/:sid', requireRole('admin', 'supervisor'), async (req, 
     }
 
     const rows = await query('SELECT * FROM fleet_serial_numbers WHERE id = ?', [req.params.sid]);
-    res.json(rows[0]);
+    res.json(normSerial(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });

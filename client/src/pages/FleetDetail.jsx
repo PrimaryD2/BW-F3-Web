@@ -18,6 +18,7 @@ import {
   resolveFleetBulletinAircraft,
   getComponentTypes,
   getFleetComponentNames,
+  getFleetSettings,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -215,6 +216,80 @@ function handleWheel(key, val, currentForm, setF) {
   const r = key === 'right_wheel_weight' ? parseFloat(val) : parseFloat(currentForm.right_wheel_weight);
   if (!isNaN(n) && !isNaN(l) && !isNaN(r)) patch.empty_weight_kg = (n + l + r).toFixed(1);
   setF(patch);
+}
+
+// ─── Toe-in helpers ───────────────────────────────────────────────────────────
+function toeInThresholds(settings) {
+  const num = (k, def) => { const v = parseFloat(settings?.[k]); return isNaN(v) ? def : v; };
+  return {
+    wheelMin: num('toe_in_wheel_min', 0),
+    wheelMax: num('toe_in_wheel_max', 1),
+    totalMin: num('toe_in_total_min', 0.4),
+    totalMax: num('toe_in_total_max', 2),
+  };
+}
+
+function ToeInSection({ form, aircraft, canEdit, setF, settings }) {
+  const th = toeInThresholds(settings);
+  const left  = canEdit ? form.toe_in_left  : aircraft.toe_in_left;
+  const right = canEdit ? form.toe_in_right : aircraft.toe_in_right;
+  const l = parseFloat(left);
+  const r = parseFloat(right);
+  const total = (!isNaN(l) && !isNaN(r)) ? l + r : null;
+
+  const wheelOk = (v) => isNaN(v) ? null : (v >= th.wheelMin && v <= th.wheelMax);
+  const totalOk = total == null ? null : (total >= th.totalMin && total <= th.totalMax);
+  const colorFor = (ok) => ok == null ? 'var(--text-secondary)' : ok ? '#16a34a' : 'var(--danger)';
+
+  return (
+    <>
+      <div style={{ fontWeight: 700, margin: '16px 0 4px' }}>Main Gear Toe-in</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+        Acceptable: {th.wheelMin}–{th.wheelMax}° per wheel · {th.totalMin}–{th.totalMax}° total
+      </div>
+      {canEdit ? (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <FormField label="Left Main (°)" half>
+            <input
+              type="number" step="0.01" value={form.toe_in_left}
+              onChange={e => setF({ toe_in_left: e.target.value })}
+              placeholder="0.00"
+              style={{ borderColor: wheelOk(l) === false ? 'var(--danger)' : undefined }}
+            />
+            {wheelOk(l) === false && <span style={{ fontSize: 10, color: 'var(--danger)' }}>Outside {th.wheelMin}–{th.wheelMax}°</span>}
+          </FormField>
+          <FormField label="Right Main (°)" half>
+            <input
+              type="number" step="0.01" value={form.toe_in_right}
+              onChange={e => setF({ toe_in_right: e.target.value })}
+              placeholder="0.00"
+              style={{ borderColor: wheelOk(r) === false ? 'var(--danger)' : undefined }}
+            />
+            {wheelOk(r) === false && <span style={{ fontSize: 10, color: 'var(--danger)' }}>Outside {th.wheelMin}–{th.wheelMax}°</span>}
+          </FormField>
+          {total != null && (
+            <div style={{ flexBasis: '100%', fontSize: 13, marginTop: 4 }}>
+              Total: <strong style={{ color: colorFor(totalOk) }}>{total.toFixed(2)}°</strong>
+              {totalOk === false && <span style={{ color: 'var(--danger)', marginLeft: 6, fontSize: 12 }}>⚠ outside {th.totalMin}–{th.totalMax}°</span>}
+              {totalOk === true && <span style={{ color: '#16a34a', marginLeft: 6, fontSize: 12 }}>✓ within range</span>}
+            </div>
+          )}
+        </div>
+      ) : (
+        (left != null && left !== '') || (right != null && right !== '') ? (
+          <>
+            <InfoRow label="Left Main" value={left != null && left !== '' ? <span style={{ color: colorFor(wheelOk(l)) }}>{l.toFixed(2)}°</span> : null} />
+            <InfoRow label="Right Main" value={right != null && right !== '' ? <span style={{ color: colorFor(wheelOk(r)) }}>{r.toFixed(2)}°</span> : null} />
+            {total != null && (
+              <InfoRow label="Total" value={<span style={{ color: colorFor(totalOk), fontWeight: 600 }}>{total.toFixed(2)}° {totalOk === false ? '⚠' : totalOk === true ? '✓' : ''}</span>} />
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No toe-in recorded.</div>
+        )
+      )}
+    </>
+  );
 }
 
 function WBSection({ form, aircraft, canEdit, setF }) {
@@ -1158,6 +1233,7 @@ export default function FleetDetail() {
   // Component types + names for serial-number dropdowns
   const [componentTypes, setComponentTypes] = useState([]);
   const [componentNames, setComponentNames] = useState([]); // { id, component_type, name }
+  const [fleetSettings, setFleetSettings] = useState({});   // toe-in thresholds etc.
 
   // Contact modal
   const [cModal, setCModal] = useState(null);
@@ -1167,7 +1243,7 @@ export default function FleetDetail() {
     component: '', component_type: '', component_name: '',
     serial_number: '', manufacturing_date: '', date_installed: '', expiry_date: '', repack_date: '',
     software_version: '', system_id: '', password: '',
-    notes: '',
+    notes: '', extra_data: {},
   };
   const [serialSearch,    setSerialSearch]    = useState('');
   const [serialSortField, setSerialSortField] = useState('component_name');
@@ -1216,7 +1292,7 @@ export default function FleetDetail() {
   async function load() {
     setLoading(true);
     try {
-      const [res, optsRes, tmplRes, etRes, modelRes, usersRes, ctRes, cnRes] = await Promise.allSettled([
+      const [res, optsRes, tmplRes, etRes, modelRes, usersRes, ctRes, cnRes, setRes] = await Promise.allSettled([
         getFleetAircraft(id),
         getFleetConfigOptions(),
         getFleetServiceTemplates(),
@@ -1225,6 +1301,7 @@ export default function FleetDetail() {
         getActiveUsers(),
         getComponentTypes(),
         getFleetComponentNames(),
+        getFleetSettings(),
       ]);
       if (optsRes.status === 'fulfilled')  setConfigOptions(optsRes.value.data || []);
       if (tmplRes.status === 'fulfilled')  setServiceTemplates((tmplRes.value.data || []).filter(t => t.active));
@@ -1233,6 +1310,7 @@ export default function FleetDetail() {
       if (usersRes.status === 'fulfilled') setUsers(usersRes.value.data || []);
       if (ctRes.status === 'fulfilled')    setComponentTypes(ctRes.value.data || []);
       if (cnRes.status === 'fulfilled')    setComponentNames(cnRes.value.data || []);
+      if (setRes.status === 'fulfilled')   setFleetSettings(setRes.value.data || {});
       if (res.status === 'fulfilled')      applyData(res.value.data);
       else throw new Error('Failed to load aircraft');
     } finally {
@@ -1269,6 +1347,8 @@ export default function FleetDetail() {
       nose_wheel_weight:     a.nose_wheel_weight   != null ? String(a.nose_wheel_weight)   : '',
       left_wheel_weight:     a.left_wheel_weight   != null ? String(a.left_wheel_weight)   : '',
       right_wheel_weight:    a.right_wheel_weight  != null ? String(a.right_wheel_weight)  : '',
+      toe_in_left:           a.toe_in_left         != null ? String(a.toe_in_left)         : '',
+      toe_in_right:          a.toe_in_right        != null ? String(a.toe_in_right)        : '',
       airworthiness_status:  a.airworthiness_status  || '',
       airworthiness_expiry:  a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
       total_hours_tsn:       a.total_hours_tsn     != null ? String(a.total_hours_tsn)     : '',
@@ -1400,6 +1480,7 @@ export default function FleetDetail() {
       system_id: serial.system_id || '',
       password: serial.password || '',
       notes: serial.notes || '',
+      extra_data: serial.extra_data && typeof serial.extra_data === 'object' ? serial.extra_data : {},
     });
   }
 
@@ -1916,8 +1997,6 @@ export default function FleetDetail() {
               </>
             )}
 
-            <WBSection form={form} aircraft={aircraft} canEdit={canEdit} setF={setF} />
-
             <div style={{ fontWeight: 700, margin: '16px 0 12px' }}>Airworthiness</div>
             {canEdit ? (
               <>
@@ -1940,6 +2019,12 @@ export default function FleetDetail() {
                 <InfoRow label="Expiry" value={fmtDate(aircraft.airworthiness_expiry)} />
               </>
             )}
+          </div>
+
+          {/* Weight, Balance & Toe-in — own card so it's visible without scrolling */}
+          <div className="card">
+            <WBSection form={form} aircraft={aircraft} canEdit={canEdit} setF={setF} />
+            <ToeInSection form={form} aircraft={aircraft} canEdit={canEdit} setF={setF} settings={fleetSettings} />
           </div>
 
           {/* Paint Codes — multiple per aircraft */}
@@ -2120,15 +2205,18 @@ export default function FleetDetail() {
             const revealed = !!revealedPasswords[s.id];
             return (
               <div className="card" style={{ padding: 14, opacity: isUninstalled ? 0.85 : 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>{s.component_name || s.component}</div>
-                    {s.component_type && (
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{s.component_type}</div>
-                    )}
-                  </div>
+                {/* Prominent type badge */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  {s.component_type ? (
+                    <span style={{
+                      display: 'inline-block', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+                      letterSpacing: '0.04em', color: '#fff', background: 'var(--accent)',
+                      borderRadius: 5, padding: '3px 9px',
+                    }}>{s.component_type}</span>
+                  ) : <span />}
                   {isUninstalled && <span className="badge badge-ghost" style={{ fontSize: 10 }}>Uninstalled</span>}
                 </div>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{s.component_name || s.component}</div>
 
                 {/* Only the fields with values render */}
                 <Field label="Serial number"    value={s.serial_number} mono />
@@ -2152,6 +2240,30 @@ export default function FleetDetail() {
                 <Field label="Expiry"        value={s.expiry_date        ? new Date(s.expiry_date).toLocaleDateString()        : ''} />
                 <Field label="Repack/Test"   value={s.repack_date        ? new Date(s.repack_date).toLocaleDateString()        : ''} />
                 <Field label="Notes"         value={s.notes} />
+
+                {/* Type-specific extra fields (propeller / governor) */}
+                {s.extra_data && Object.keys(s.extra_data).length > 0 && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)' }}>
+                    {/propeller|prop/i.test(s.component_type || '') && (
+                      <>
+                        <Field label="Blade 1" value={s.extra_data.blade1} />
+                        <Field label="Blade 2" value={s.extra_data.blade2} />
+                        <Field label="Blade 3" value={s.extra_data.blade3} />
+                        <Field label="Hub"     value={s.extra_data.hub} />
+                        <Field label="Spinner" value={s.extra_data.spinner} />
+                        <Field label="Plate"   value={s.extra_data.plate} />
+                        <Field label="Weights" value={s.extra_data.weights} />
+                      </>
+                    )}
+                    {/governor/i.test(s.component_type || '') && (
+                      <>
+                        <Field label="Governor Plate S/N"    value={s.extra_data.gov_plate} />
+                        <Field label="Governor Solenoid S/N" value={s.extra_data.gov_solenoid} />
+                        <Field label="Plate Hole Size"       value={s.extra_data.gov_hole_size ? `${s.extra_data.gov_hole_size} mm` : ''} />
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Software version history button */}
                 {s.version_logs && s.version_logs.length > 0 && (
@@ -2339,6 +2451,54 @@ export default function FleetDetail() {
                       <FormField label="Repack/Test date">
                         <input type="date" value={newSerial.repack_date} onChange={e => setNewSerial(n => ({ ...n, repack_date: e.target.value }))} />
                       </FormField>
+
+                      {/* ── Propeller-specific fields ── */}
+                      {/propeller|prop/i.test(newSerial.component_type) && (
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 8px' }}>Propeller Details</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                            {['Blade 1', 'Blade 2', 'Blade 3', 'Hub', 'Spinner', 'Plate'].map(label => {
+                              const key = label.toLowerCase().replace(/\s+/g, '');
+                              return (
+                                <FormField key={key} label={label}>
+                                  <input
+                                    value={newSerial.extra_data?.[key] || ''}
+                                    onChange={e => setNewSerial(n => ({ ...n, extra_data: { ...n.extra_data, [key]: e.target.value } }))}
+                                    placeholder="Serial / ref"
+                                  />
+                                </FormField>
+                              );
+                            })}
+                            <FormField label="Weights">
+                              <select value={newSerial.extra_data?.weights || ''} onChange={e => setNewSerial(n => ({ ...n, extra_data: { ...n.extra_data, weights: e.target.value } }))}>
+                                <option value="">— Select —</option>
+                                <option value="No">No weights</option>
+                                <option value="Stainless">Stainless</option>
+                                <option value="Brass">Brass</option>
+                              </select>
+                            </FormField>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Governor-specific fields ── */}
+                      {/governor/i.test(newSerial.component_type) && (
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '4px 0 8px' }}>Governor Details</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                            <FormField label="Governor Plate Serial Number">
+                              <input value={newSerial.extra_data?.gov_plate || ''} onChange={e => setNewSerial(n => ({ ...n, extra_data: { ...n.extra_data, gov_plate: e.target.value } }))} placeholder="Serial number" />
+                            </FormField>
+                            <FormField label="Governor Solenoid Serial Number">
+                              <input value={newSerial.extra_data?.gov_solenoid || ''} onChange={e => setNewSerial(n => ({ ...n, extra_data: { ...n.extra_data, gov_solenoid: e.target.value } }))} placeholder="Serial number" />
+                            </FormField>
+                            <FormField label="Plate Hole Size (mm)">
+                              <input value={newSerial.extra_data?.gov_hole_size || ''} onChange={e => setNewSerial(n => ({ ...n, extra_data: { ...n.extra_data, gov_hole_size: e.target.value } }))} placeholder="e.g. 2.5" />
+                            </FormField>
+                          </div>
+                        </div>
+                      )}
+
                       <div style={{ gridColumn: '1 / -1' }}>
                         <FormField label="Notes">
                           <textarea rows={2} value={newSerial.notes} onChange={e => setNewSerial(n => ({ ...n, notes: e.target.value }))} />
