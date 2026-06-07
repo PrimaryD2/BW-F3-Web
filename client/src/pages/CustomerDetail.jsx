@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   getCustomer, createCustomer, updateCustomer, archiveCustomer,
   getCustomerLogs, createCustomerLog, updateCustomerLog, deleteCustomerLog,
-  getUsers, getFleetModels,
+  getActiveUsers, getFleetModels,
   getCustomerBookings, createCustomerBooking,
   getCustomerQuotes, createCustomerQuote, updateCustomerQuote, deleteCustomerQuote, sendCustomerQuoteEmail,
   getFleetList, getFleetServiceTemplates, getFleetConfigOptions,
@@ -621,7 +621,11 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
     configOptions.filter(o => o.show_in_configurator !== false && o.show_in_configurator !== 0),
   [configOptions]);
 
-  // IDs of all standard (pre-selected / locked) options — from visible set only
+  // Locked options: always included, cannot be deselected
+  const lockedOptionIds = useMemo(() =>
+    new Set(visibleOptions.filter(o => o.is_locked).map(o => Number(o.id))),
+  [visibleOptions]);
+  // Standard options: pre-selected by default but the buyer CAN change them
   const standardOptionIds = useMemo(() =>
     new Set(visibleOptions.filter(o => o.is_standard).map(o => Number(o.id))),
   [visibleOptions]);
@@ -639,12 +643,15 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
     initial?.model_id ? Number(initial.model_id) : null
   );
 
-  // Pre-select standard options always; merge with previously saved options when editing
+  // Pre-select standard + locked for new quotes. When editing, keep what was saved
+  // but always force-include locked options (they can never be off).
   const [selectedOptions, setSelectedOptions] = useState(() => {
-    const stdIds = configOptions.filter(o => o.is_standard && o.show_in_configurator !== false && o.show_in_configurator !== 0).map(o => Number(o.id));
-    if (!initial?.options?.length) return new Set(stdIds);
+    const visible = configOptions.filter(o => o.show_in_configurator !== false && o.show_in_configurator !== 0);
+    const lockedIds = visible.filter(o => o.is_locked).map(o => Number(o.id));
+    const stdIds    = visible.filter(o => o.is_standard).map(o => Number(o.id));
+    if (!initial?.options?.length) return new Set([...lockedIds, ...stdIds]);
     const savedIds = initial.options.filter(o => o.option_id).map(o => Number(o.option_id));
-    return new Set([...stdIds, ...savedIds]);
+    return new Set([...lockedIds, ...savedIds]);
   });
 
   const [form, setForm] = useState({
@@ -681,7 +688,7 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
 
   function toggleOption(id) {
     const nid = Number(id);
-    if (standardOptionIds.has(nid)) return; // locked
+    if (lockedOptionIds.has(nid)) return; // locked — cannot be changed
     setSelectedOptions(prev => {
       const s = new Set(prev);
       s.has(nid) ? s.delete(nid) : s.add(nid);
@@ -798,14 +805,38 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
                       {m.code}
                     </span>
                   )}
+                  {m.description && (
+                    <div style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)', textAlign: 'left' }}>
+                      {m.description.length > 120 ? m.description.slice(0, 120) + '…' : m.description}
+                    </div>
+                  )}
                   {m.base_price != null && (
                     <div style={{ marginTop: 10, fontWeight: 700, fontSize: 14, color: sel ? '#3b82f6' : 'var(--text-secondary)' }}>
-                      €{Number(m.base_price).toLocaleString('de-DE')}
+                      from €{Number(m.base_price).toLocaleString('de-DE')}
                     </div>
                   )}
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Selected model detail panel */}
+        {selectedModel && selectedModel.description && (
+          <div style={{
+            marginTop: 20, padding: '16px 18px', borderRadius: 12,
+            background: '#3b82f60d', border: '1px solid #3b82f633',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 18 }}>✈</span>
+              <span style={{ fontWeight: 800, fontSize: 15 }}>{selectedModel.name}</span>
+              {selectedModel.base_price != null && (
+                <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#3b82f6' }}>from €{Number(selectedModel.base_price).toLocaleString('de-DE')}</span>
+              )}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+              {selectedModel.description}
+            </div>
           </div>
         )}
       </div>
@@ -835,7 +866,7 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
           {selectedModel && <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>— {selectedModel.name}</span>}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 20 }}>
-          🔒 = included as standard (cannot be removed) &nbsp;|&nbsp; toggle optional extras
+          🔒 = always included &nbsp;|&nbsp; <span style={{ color: '#22c55e', fontWeight: 600 }}>Standard</span> = pre-selected (you can change it) &nbsp;|&nbsp; tap any option to add or remove
         </div>
 
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
@@ -859,20 +890,22 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(155px, 1fr))', gap: 8 }}>
                     {opts.map(opt => {
+                      const isLocked = lockedOptionIds.has(Number(opt.id));
                       const isStd = standardOptionIds.has(Number(opt.id));
                       const sel = selectedOptions.has(Number(opt.id));
                       return (
                         <div
                           key={opt.id}
-                          onClick={() => !isStd && toggleOption(Number(opt.id))}
+                          onClick={() => !isLocked && toggleOption(Number(opt.id))}
                           style={{
                             border: `1.5px solid ${sel ? color : 'var(--border)'}`,
                             borderRadius: 8, padding: '10px 12px',
-                            cursor: isStd ? 'default' : 'pointer',
+                            cursor: isLocked ? 'default' : 'pointer',
                             background: sel ? bg : 'var(--bg-secondary)',
                             transition: 'all 0.12s',
                             display: 'flex', flexDirection: 'column', gap: 5,
                             boxShadow: sel ? `0 0 0 2px ${color}22` : 'none',
+                            opacity: isLocked ? 0.95 : 1,
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -884,7 +917,7 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
                               transition: 'all 0.12s', fontSize: 9,
                             }}>
-                              {isStd ? '🔒' : sel ? <span style={{ color: '#fff', fontWeight: 900, lineHeight: 1 }}>✓</span> : null}
+                              {isLocked ? '🔒' : sel ? <span style={{ color: '#fff', fontWeight: 900, lineHeight: 1 }}>✓</span> : null}
                             </div>
                             <span style={{
                               fontSize: 12.5, lineHeight: 1.35, flex: 1,
@@ -892,12 +925,12 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
                               color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
                             }}>
                               {opt.label}
-                              {isStd && (
+                              {(isLocked || isStd) && (
                                 <span style={{
-                                  marginLeft: 5, fontSize: 9, padding: '1px 5px', borderRadius: 10,
+                                  marginLeft: 5, fontSize: 9, padding: '1px 6px', borderRadius: 10,
                                   background: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e44',
-                                  fontWeight: 700, verticalAlign: 'middle',
-                                }}>STD</span>
+                                  fontWeight: 700, verticalAlign: 'middle', whiteSpace: 'nowrap',
+                                }}>{isLocked ? 'Included' : 'Standard'}</span>
                               )}
                             </span>
                           </div>
@@ -1173,7 +1206,7 @@ function SendEmailModal({ quote, customer, onSend, onCancel }) {
       setSent(true);
     } catch (err) {
       if (err.response?.status === 503) {
-        setError('Email sending is not configured on this server. Contact your administrator.');
+        setError('Email is not configured on the server. An administrator must set BREVO_API_KEY in the server environment (docker-compose) and restart. See the deployment notes.');
       } else {
         setError(err.response?.data?.error || err.message || 'Failed to send email.');
       }
@@ -1425,15 +1458,15 @@ export default function CustomerDetail() {
 
   useEffect(() => {
     if (!isNew) setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       isNew ? Promise.resolve(null) : loadCustomer(),
-      getUsers(),
+      getActiveUsers(),
       getFleetModels(),
       getFleetConfigOptions(),
     ]).then(([, uRes, mRes, coRes]) => {
-      setUsers(uRes?.data || []);
-      setModels(mRes?.data || []);
-      setConfigOptions(coRes?.data || []);
+      if (uRes.status === 'fulfilled')  setUsers(uRes.value?.data || []);
+      if (mRes.status === 'fulfilled')  setModels(mRes.value?.data || []);
+      if (coRes.status === 'fulfilled') setConfigOptions(coRes.value?.data || []);
     }).finally(() => setLoading(false));
   }, [id]); // re-run when id changes (e.g. after creating a new customer)
 

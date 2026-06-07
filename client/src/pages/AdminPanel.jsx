@@ -809,7 +809,7 @@ function FleetConfigTab() {
   const [loading, setLoading]   = useState(true);
   const [editId,  setEditId]    = useState(null);   // option id being edited
   const [editForm, setEditForm] = useState({});
-  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, price: '', show_in_configurator: true });
+  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', show_in_configurator: true });
   const [saving,   setSaving]   = useState(false);
 
   useEffect(() => { loadOptions(); }, []);
@@ -833,9 +833,9 @@ function FleetConfigTab() {
     if (!cat || !addForm.label.trim()) { toast.error('Category and label are required'); return; }
     setSaving(true);
     try {
-      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order, is_standard: addForm.is_standard, price: addForm.price !== '' ? Number(addForm.price) : null, show_in_configurator: addForm.show_in_configurator });
+      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order, is_standard: addForm.is_standard, is_locked: addForm.is_locked, price: addForm.price !== '' ? Number(addForm.price) : null, show_in_configurator: addForm.show_in_configurator });
       setOptions(o => [...o, r.data].sort((a,b) => a.category.localeCompare(b.category) || a.sort_order - b.sort_order || a.label.localeCompare(b.label)));
-      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, price: '', show_in_configurator: true });
+      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', show_in_configurator: true });
       toast.success('Option added');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to add');
@@ -844,7 +844,7 @@ function FleetConfigTab() {
 
   function startEdit(o) {
     setEditId(o.id);
-    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order, is_standard: !!o.is_standard, price: o.price != null ? String(o.price) : '', show_in_configurator: o.show_in_configurator !== false });
+    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order, is_standard: !!o.is_standard, is_locked: !!o.is_locked, price: o.price != null ? String(o.price) : '', show_in_configurator: o.show_in_configurator !== false });
   }
 
   async function handleUpdate(oid) {
@@ -881,7 +881,7 @@ function FleetConfigTab() {
       <div className="card" style={{ marginBottom: 24 }}>
         <div style={{ fontWeight: 700, marginBottom: 4 }}>Add Configuration Option</div>
         <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 14 }}>
-          Mark <strong>Standard</strong> to pre-select &amp; lock it in the configurator. Uncheck <strong>Visible in Configurator</strong> to hide retired or internal options. Add a price to enable quote totals.
+          <strong>Standard</strong> = pre-selected by default but the buyer can change it. <strong>Locked</strong> = always included, cannot be removed. Uncheck <strong>Visible in Configurator</strong> to hide retired or internal options. Add a price to enable quote totals.
         </p>
         <form onSubmit={handleAdd}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -914,7 +914,11 @@ function FleetConfigTab() {
             <div className="form-group" style={{ flex: '0 0 auto', margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 <input type="checkbox" checked={addForm.is_standard} onChange={e => setAddForm(f => ({ ...f, is_standard: e.target.checked }))} />
-                Standard
+                Standard (pre-selected)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={addForm.is_locked} onChange={e => setAddForm(f => ({ ...f, is_locked: e.target.checked }))} />
+                🔒 Locked (always included)
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 <input type="checkbox" checked={addForm.show_in_configurator} onChange={e => setAddForm(f => ({ ...f, show_in_configurator: e.target.checked }))} />
@@ -949,6 +953,7 @@ function FleetConfigTab() {
                       <th>Label</th>
                       <th style={{ width: 100 }}>Price</th>
                       <th style={{ width: 80 }}>Standard</th>
+                      <th style={{ width: 70 }}>Locked</th>
                       <th style={{ width: 110 }}>Configurator</th>
                       <th style={{ width: 60 }}>Order</th>
                       <th style={{ width: 90 }}></th>
@@ -983,6 +988,13 @@ function FleetConfigTab() {
                             <input type="checkbox" checked={editForm.is_standard} onChange={e => setEditForm(f => ({ ...f, is_standard: e.target.checked }))} />
                           ) : (
                             <span>{o.is_standard ? '✅' : ''}</span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <input type="checkbox" checked={editForm.is_locked} onChange={e => setEditForm(f => ({ ...f, is_locked: e.target.checked }))} />
+                          ) : (
+                            <span>{o.is_locked ? '🔒' : ''}</span>
                           )}
                         </td>
                         <td>
@@ -1180,7 +1192,7 @@ function EventTypesSection() {
   );
 }
 
-const EMPTY_MODEL_FORM = { name: '', code: '', active: true, show_in_configurator: false, base_price: '' };
+const EMPTY_MODEL_FORM = { name: '', code: '', active: true, show_in_configurator: false, base_price: '', description: '' };
 
 function ModelsTab() {
   const toast = useToast();
@@ -1232,6 +1244,7 @@ function ModelsTab() {
       active: !!model.active,
       show_in_configurator: !!model.show_in_configurator,
       base_price: model.base_price != null ? String(model.base_price) : '',
+      description: model.description || '',
     });
   }
 
@@ -1272,6 +1285,15 @@ function ModelsTab() {
               {editingId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditingId(null); setForm(EMPTY_MODEL_FORM); }}>Cancel</button>}
             </div>
           </div>
+        </div>
+        <div className="form-group" style={{ margin: 0 }}>
+          <label>Description <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— shown to the buyer in the configurator</span></label>
+          <textarea
+            rows={3}
+            value={form.description}
+            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            placeholder="Explain what this model is and what the buyer gets — e.g. 'The BW635RG is our retractable-gear flagship: 140 hp Rotax 915iS, 1,400 km range, full glass cockpit…'"
+          />
         </div>
         <div style={{ display: 'flex', gap: 20 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
@@ -1429,6 +1451,7 @@ const EMPTY_BULLETIN_FORM = {
   what_to_do: '',
   affected_option_ids: [],
   serial_criteria: [],
+  aircraft_numbers: '',
 };
 
 function bulletinCategoryMeta(value) {
@@ -1451,19 +1474,21 @@ function BulletinsTab() {
   const [resolveForm,     setResolveForm]    = useState({});       // { [aircraft_id]: {...} }
   const [users,           setUsers]          = useState([]);
   const [componentTypes,  setComponentTypes] = useState([]);
+  const [componentNames,  setComponentNames] = useState([]);
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
     try {
-      const [bRes, oRes, uRes, ctRes] = await Promise.all([
-        getFleetBulletins(), getFleetConfigOptions(), getUsers(), getComponentTypes(),
+      const [bRes, oRes, uRes, ctRes, cnRes] = await Promise.all([
+        getFleetBulletins(), getFleetConfigOptions(), getUsers(), getComponentTypes(), getComponentNames(),
       ]);
       setBulletins(bRes.data || []);
       setConfigOptions(oRes.data || []);
       setUsers(uRes.data || []);
       setComponentTypes(ctRes.data || []);
+      setComponentNames(cnRes.data || []);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load bulletins');
     } finally { setLoading(false); }
@@ -1496,6 +1521,7 @@ function BulletinsTab() {
           ...c,
           _mode: c.exact_serial ? 'exact' : 'range',
         })),
+        aircraft_numbers:    data.aircraft_numbers || '',
       });
       setEditingId(bulletin.id);
       setShowForm(true);
@@ -1591,6 +1617,64 @@ function BulletinsTab() {
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load affected aircraft');
     }
+  }
+
+  // Export / print a bulletin as a customer-ready document
+  async function printBulletin(bulletin) {
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Pop-up blocked — please allow pop-ups and try again'); return; }
+    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+
+    // Fetch full bulletin + affected aircraft
+    let full = bulletin, aircraft = [];
+    try {
+      const [fRes, aRes] = await Promise.all([getFleetBulletin(bulletin.id), getFleetBulletinAircraft(bulletin.id)]);
+      full = fRes.data || bulletin;
+      aircraft = aRes.data || [];
+    } catch { /* fall back to list data */ }
+
+    const meta = bulletinCategoryMeta(full.category);
+    const now = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const acRows = aircraft.length
+      ? aircraft.map(a => `<tr>
+          <td>BW-${esc(a.bw_serial)}</td>
+          <td>${esc(a.registration || '—')}</td>
+          <td>${esc(a.model || '—')}</td>
+          <td>${a.status === 'resolved' ? '✓ Resolved' : 'Open'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" style="text-align:center;color:#999;font-style:italic;padding:12px">No specific aircraft listed</td></tr>';
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Service Bulletin — ${esc(full.title)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a;padding:18mm 20mm}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #1a1a1a;padding-bottom:14px;margin-bottom:18px}
+  h1{font-size:20px;font-weight:800}
+  .sub{font-size:10px;color:#777;margin-top:3px}
+  .cat{display:inline-block;font-size:11px;font-weight:700;padding:4px 12px;border-radius:5px;background:#1a1a1a;color:#fff;text-transform:uppercase;letter-spacing:0.05em}
+  h2{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#555;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
+  .box{font-size:12px;line-height:1.6;white-space:pre-wrap}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{padding:6px 8px;border:1px solid #ddd;text-align:left;font-size:11px}
+  th{background:#f2f2f2;font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#666}
+  .footer{margin-top:28px;border-top:1px solid #ddd;padding-top:7px;font-size:9px;color:#bbb;display:flex;justify-content:space-between}
+  @media print{body{padding:8mm 12mm}@page{margin:8mm;size:A4}}
+</style></head><body>
+  <div class="head">
+    <div><h1>Service Bulletin</h1><div class="sub">Blackwing Aircraft</div></div>
+    <div style="text-align:right"><span class="cat">${esc(meta.label)}</span><div class="sub" style="margin-top:6px">Issued: ${now}</div></div>
+  </div>
+  <h2>Subject</h2>
+  <div class="box" style="font-weight:700;font-size:14px">${esc(full.title)}</div>
+  ${full.reason ? `<h2>Reason</h2><div class="box">${esc(full.reason)}</div>` : ''}
+  ${full.what_to_do ? `<h2>Required Action</h2><div class="box">${esc(full.what_to_do)}</div>` : ''}
+  <h2>Affected Aircraft</h2>
+  <table><thead><tr><th>BW Serial</th><th>Registration</th><th>Model</th><th>Status</th></tr></thead><tbody>${acRows}</tbody></table>
+  <div class="footer"><span>Blackwing Aircraft Management System</span><span>Bulletin #${full.id} · ${now}</span></div>
+  <script>window.onload=function(){window.print()}<\/script>
+</body></html>`;
+    w.document.write(html);
+    w.document.close();
   }
 
   async function resolveAircraft(row) {
@@ -1758,11 +1842,26 @@ function BulletinsTab() {
                       </div>
                       <div className="form-group" style={{ flex: '1 1 130px', margin: 0 }}>
                         <label style={{ fontSize: 11 }}>Model / Name</label>
-                        <input
-                          value={c.component_name || ''}
-                          onChange={e => updateCriteria(i, 'component_name', e.target.value)}
-                          placeholder="e.g. Rotax 915 iS"
-                        />
+                        {(() => {
+                          const namesForType = componentNames.filter(cn => cn.component_type === c.component_type);
+                          if (!c.component_type || namesForType.length === 0) {
+                            return (
+                              <input
+                                value={c.component_name || ''}
+                                onChange={e => updateCriteria(i, 'component_name', e.target.value)}
+                                placeholder={c.component_type ? 'No names defined for this type' : 'Select a type first'}
+                              />
+                            );
+                          }
+                          return (
+                            <select value={c.component_name || ''} onChange={e => updateCriteria(i, 'component_name', e.target.value)}>
+                              <option value="">— Any —</option>
+                              {namesForType.map(cn => (
+                                <option key={cn.id} value={cn.name}>{cn.name}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
                       </div>
                       <div className="form-group" style={{ flex: '0 0 110px', margin: 0 }}>
                         <label style={{ fontSize: 11 }}>Match type</label>
@@ -1813,6 +1912,19 @@ function BulletinsTab() {
                   </div>
                 ))
               )}
+            </div>
+
+            {/* Specific aircraft / airplane numbers */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginBottom: 16 }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>Specific Aircraft Numbers</span>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 8px' }}>
+                Apply this bulletin directly to specific aircraft by BW serial or aircraft number. Comma-separated — e.g. <code>032, 040, 044</code>.
+              </p>
+              <input
+                value={form.aircraft_numbers}
+                onChange={e => setForm(f => ({ ...f, aircraft_numbers: e.target.value }))}
+                placeholder="e.g. 032, 040, 044"
+              />
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -1897,6 +2009,7 @@ function BulletinsTab() {
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           <button className="btn btn-ghost btn-sm" onClick={() => openAffected(b)}>View</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => openEdit(b)}>Edit</button>
+                          <button className="btn btn-ghost btn-sm" title="Export / print document" onClick={() => printBulletin(b)}>🖨 Export</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => toggleStatus(b)}>
                             {b.status === 'open' ? 'Close' : 'Reopen'}
                           </button>

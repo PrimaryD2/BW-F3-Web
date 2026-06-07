@@ -610,6 +610,12 @@ const ALTER_STMTS = [
      ('toe_in_wheel_max', '1'),
      ('toe_in_total_min', '0.4'),
      ('toe_in_total_max', '2')`,
+  // Config option: distinguish "preselected standard (changeable)" from "locked (always included)"
+  `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Aircraft model: customer-facing description shown in the configurator
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS description TEXT NULL`,
+  // Bulletins: target specific aircraft / airplane numbers (comma-separated list of bw_serial or aircraft_number)
+  `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS aircraft_numbers VARCHAR(500) NULL`,
   // serial_number was originally NOT NULL but is optional (some components have no serial)
   `ALTER TABLE fleet_serial_numbers MODIFY COLUMN serial_number VARCHAR(200) NULL`,
   // Admin-managed component name list (per type), used as dropdown when adding components

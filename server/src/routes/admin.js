@@ -343,12 +343,12 @@ router.get('/models', async (_req, res) => {
 
 // POST /api/admin/models
 router.post('/models', async (req, res) => {
-  const { name, code, active = true, sort_order = 0, show_in_configurator = false, base_price } = req.body || {};
+  const { name, code, active = true, sort_order = 0, show_in_configurator = false, base_price, description } = req.body || {};
   if (!String(name || '').trim()) return res.status(400).json({ error: 'Model name required' });
   try {
     const result = await query(
-      'INSERT INTO fleet_models (name, code, active, sort_order, show_in_configurator, base_price) VALUES (?, ?, ?, ?, ?, ?)',
-      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null]
+      'INSERT INTO fleet_models (name, code, active, sort_order, show_in_configurator, base_price, description) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [result.insertId]);
     res.status(201).json(rows[0]);
@@ -361,11 +361,11 @@ router.post('/models', async (req, res) => {
 
 // PUT /api/admin/models/:id
 router.put('/models/:id', async (req, res) => {
-  const { name, code, active, sort_order, show_in_configurator, base_price } = req.body || {};
+  const { name, code, active, sort_order, show_in_configurator, base_price, description } = req.body || {};
   try {
     await query(
-      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ?, show_in_configurator = ?, base_price = ? WHERE id = ?',
-      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, req.params.id]
+      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ?, show_in_configurator = ?, base_price = ?, description = ? WHERE id = ?',
+      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null, req.params.id]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [req.params.id]);
     res.json(rows[0]);
@@ -559,6 +559,21 @@ async function recomputeAffectedAircraft(bulletinId) {
     for (const m of serialMatches) aircraftIds.add(m.aircraft_id);
   }
 
+  // 3) Match by explicit aircraft / airplane numbers (comma-separated bw_serial or aircraft_number)
+  const [bulletinRow] = await query('SELECT aircraft_numbers FROM fleet_bulletins WHERE id = ?', [bulletinId]);
+  if (bulletinRow?.aircraft_numbers) {
+    const nums = bulletinRow.aircraft_numbers.split(',').map(s => s.trim()).filter(Boolean);
+    if (nums.length) {
+      const placeholders = nums.map(() => '?').join(',');
+      const acMatches = await query(
+        `SELECT id AS aircraft_id FROM fleet_aircraft
+         WHERE bw_serial IN (${placeholders}) OR aircraft_number IN (${placeholders})`,
+        [...nums, ...nums]
+      );
+      for (const m of acMatches) aircraftIds.add(m.aircraft_id);
+    }
+  }
+
   for (const aircraft_id of aircraftIds) {
     await query(
       `INSERT IGNORE INTO fleet_bulletin_aircraft (bulletin_id, aircraft_id, serial_id) VALUES (?, ?, NULL)`,
@@ -646,6 +661,7 @@ router.post('/bulletins', async (req, res) => {
     what_to_do,
     affected_option_ids = [],
     serial_criteria = [],
+    aircraft_numbers,
   } = req.body || {};
   if (!String(title || '').trim()) {
     return res.status(400).json({ error: 'title is required' });
@@ -655,9 +671,9 @@ router.post('/bulletins', async (req, res) => {
   }
   try {
     const result = await query(
-      `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by, serial_prefix)
-       VALUES (?, ?, ?, ?, ?, '')`,
-      [String(title).trim(), category, reason || null, what_to_do || null, req.user.id]
+      `INSERT INTO fleet_bulletins (title, category, reason, what_to_do, created_by, serial_prefix, aircraft_numbers)
+       VALUES (?, ?, ?, ?, ?, '', ?)`,
+      [String(title).trim(), category, reason || null, what_to_do || null, req.user.id, aircraft_numbers || null]
     );
     const bulletinId = result.insertId;
     for (const oid of affected_option_ids) {
@@ -704,6 +720,7 @@ router.put('/bulletins/:id', async (req, res) => {
     if (reason !== undefined)     { fields.push('reason = ?');     params.push(reason || null); }
     if (what_to_do !== undefined) { fields.push('what_to_do = ?'); params.push(what_to_do || null); }
     if (status !== undefined)     { fields.push('status = ?');     params.push(status === 'closed' ? 'closed' : 'open'); }
+    if (req.body.aircraft_numbers !== undefined) { fields.push('aircraft_numbers = ?'); params.push(req.body.aircraft_numbers || null); }
 
     if (fields.length > 0) {
       params.push(req.params.id);
@@ -733,7 +750,7 @@ router.put('/bulletins/:id', async (req, res) => {
         );
       }
     }
-    if (Array.isArray(affected_option_ids) || Array.isArray(serial_criteria)) {
+    if (Array.isArray(affected_option_ids) || Array.isArray(serial_criteria) || req.body.aircraft_numbers !== undefined) {
       await recomputeAffectedAircraft(req.params.id);
     }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCustomers, getCustomerFollowups, getUsers } from '../api/index';
+import { getCustomers, getCustomerFollowups, getActiveUsers } from '../api/index';
 
 // ─── Label maps ──────────────────────────────────────────────────────────────
 const STATUS_LABELS = {
@@ -85,14 +85,14 @@ export default function CustomerList() {
   const [showFollowups, setShowFollowups] = useState(false);
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       getCustomers(),
       getCustomerFollowups(),
-      getUsers(),
+      getActiveUsers(),
     ]).then(([cRes, fRes, uRes]) => {
-      setCustomers(cRes.data || []);
-      setFollowups(fRes.data || []);
-      setUsers(uRes.data || []);
+      if (cRes.status === 'fulfilled') setCustomers(cRes.value.data || []);
+      if (fRes.status === 'fulfilled') setFollowups(fRes.value.data || []);
+      if (uRes.status === 'fulfilled') setUsers(uRes.value.data || []);
     }).finally(() => setLoading(false));
   }, []);
 
