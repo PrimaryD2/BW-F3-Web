@@ -135,6 +135,7 @@ export const updateFleetPlannedMaintenance = (pid, d) => api.put(`/fleet/planned
 export const deleteFleetPlannedMaintenance  = (pid)    => api.delete(`/fleet/planned-maintenance/${pid}`);
 export const signOffFleetPlannedMaintenance = (pid, d) => api.post(`/fleet/planned-maintenance/${pid}/signoff`, d);
 export const editCompletedFleetPlannedMaintenance = (pid, d) => api.patch(`/fleet/planned-maintenance/${pid}`, d);
+export const unlockFleetPlannedMaintenance = (pid) => api.post(`/fleet/planned-maintenance/${pid}/unlock`);
 
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);

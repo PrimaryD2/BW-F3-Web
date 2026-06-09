@@ -97,6 +97,22 @@ function normPlannedMaintenance(item) {
   };
 }
 
+// Attach photos[] to an array of planned-maintenance item rows (mutates in place)
+async function attachItemPhotos(itemRows) {
+  if (!itemRows || !itemRows.length) return itemRows;
+  const ids = itemRows.map(it => it.id);
+  const photos = await query(
+    `SELECT fmp.*, u.name AS uploaded_by_name FROM fleet_maintenance_photos fmp
+     LEFT JOIN users u ON u.id = fmp.uploaded_by
+     WHERE fmp.item_id IN (${ids.map(() => '?').join(',')}) ORDER BY fmp.created_at`,
+    ids
+  );
+  const byItem = {};
+  for (const p of photos) { (byItem[p.item_id] ||= []).push(p); }
+  for (const it of itemRows) { it.photos = byItem[it.id] || []; }
+  return itemRows;
+}
+
 // Parse the JSON extra_data column on a serial row back into an object
 function normSerial(s) {
   if (!s) return s;
@@ -976,16 +992,24 @@ router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 's
 
     const techName = (signed_by || req.user.name || 'Unknown').trim();
 
-    // Create service record if item has a template
-    let recordId = null;
+    // Create or update the service record if item has a template.
+    // If re-signing an already-signed item, update its existing record instead of creating a duplicate.
+    let recordId = item.signed_off_record_id || null;
     if (item.template_id) {
       const aircraftRows = await query('SELECT total_hours_tsn FROM fleet_aircraft WHERE id = ?', [item.aircraft_id]);
       const hrsAtCompletion = aircraftRows[0]?.total_hours_tsn != null ? Number(aircraftRows[0].total_hours_tsn) : null;
-      const sr = await query(
-        `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
-        [item.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, notes || null, req.user.id]
-      );
-      recordId = Number(sr.insertId);
+      if (recordId) {
+        await query(
+          `UPDATE fleet_service_records SET completed_date=?, hours_at_completion=?, signed_by=?, notes=? WHERE id=?`,
+          [safeDate, hrsAtCompletion, techName, notes || null, recordId]
+        );
+      } else {
+        const sr = await query(
+          `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
+          [item.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, notes || null, req.user.id]
+        );
+        recordId = Number(sr.insertId);
+      }
     }
 
     await query(
@@ -1077,13 +1101,31 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
     );
 
     if (items) {
-      await query('DELETE FROM fleet_planned_maintenance_items WHERE planned_id = ?', [req.params.pid]);
+      // Merge instead of wipe-and-recreate, so sign-offs, photos and notes are preserved.
+      const existing = await query('SELECT id, signed_off FROM fleet_planned_maintenance_items WHERE planned_id = ?', [req.params.pid]);
+      const keepIds = items.filter(it => it.id).map(it => Number(it.id));
+      // Remove items the user deleted — but never delete a signed-off item (keep its history/photos)
+      for (const ex of existing) {
+        if (!keepIds.includes(Number(ex.id)) && !ex.signed_off) {
+          await query('DELETE FROM fleet_planned_maintenance_items WHERE id = ?', [ex.id]);
+        }
+      }
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        await query(
-          `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
-          [req.params.pid, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
-        );
+        if (item.id) {
+          // Update only the descriptive fields — preserve signed_off, signed_off_by, notes, completed_date, photos
+          await query(
+            `UPDATE fleet_planned_maintenance_items
+             SET template_id = ?, title = ?, description = ?, assigned_technician_id = ?, sort_order = ?
+             WHERE id = ? AND planned_id = ?`,
+            [item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i, item.id, req.params.pid]
+          );
+        } else {
+          await query(
+            `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
+            [req.params.pid, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
+          );
+        }
       }
     }
 
@@ -1107,6 +1149,7 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
        WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
       [req.params.pid]
     );
+    await attachItemPhotos(itemRows);
 
     res.json(normPlannedMaintenance({ ...rows[0], items: itemRows }));
   } catch (err) {
@@ -1173,6 +1216,43 @@ router.patch('/planned-maintenance/:pid', requireRole('admin'), async (req, res)
     res.json(normPlannedMaintenance({ ...rows[0], items: itemRows }));
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/fleet/planned-maintenance/:pid/unlock — admin reverts a completed record
+// back to "planned" so work items and sign-offs can be edited. Existing items,
+// sign-offs, notes and photos are all preserved.
+router.post('/planned-maintenance/:pid/unlock', requireRole('admin'), async (req, res) => {
+  try {
+    const rowsBefore = await query('SELECT * FROM fleet_planned_maintenance WHERE id = ?', [req.params.pid]);
+    if (!rowsBefore.length) return res.status(404).json({ error: 'Not found' });
+    await query(
+      `UPDATE fleet_planned_maintenance SET status = 'planned' WHERE id = ? AND status = 'completed'`,
+      [req.params.pid]
+    );
+    const rows = await query(
+      `SELECT ${PLANNED_MAINTENANCE_SELECT}
+       FROM fleet_planned_maintenance fpm
+       LEFT JOIN fleet_service_templates fst ON fst.id = fpm.template_id
+       JOIN fleet_aircraft fa ON fa.id = fpm.aircraft_id
+       LEFT JOIN users tech ON tech.id = fpm.assigned_technician_id
+       LEFT JOIN customers cust ON cust.id = fpm.customer_id
+       WHERE fpm.id = ?`,
+      [req.params.pid]
+    );
+    const itemRows = await query(
+      `SELECT fpmi.*, fst.title AS template_title, fst.category, u.name AS item_technician_name
+       FROM fleet_planned_maintenance_items fpmi
+       LEFT JOIN fleet_service_templates fst ON fst.id = fpmi.template_id
+       LEFT JOIN users u ON u.id = fpmi.assigned_technician_id
+       WHERE fpmi.planned_id = ? ORDER BY fpmi.sort_order, fpmi.id`,
+      [req.params.pid]
+    );
+    await attachItemPhotos(itemRows);
+    res.json(normPlannedMaintenance({ ...rows[0], items: itemRows }));
+  } catch (err) {
+    console.error('POST /planned-maintenance/:pid/unlock error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

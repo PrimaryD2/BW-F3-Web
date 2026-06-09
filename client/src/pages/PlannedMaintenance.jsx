@@ -7,6 +7,7 @@ import {
   signOffFleetPlannedMaintenance,
   updateFleetPlannedMaintenance,
   editCompletedFleetPlannedMaintenance,
+  unlockFleetPlannedMaintenance,
   signOffMaintenanceItem,
   uploadMaintenanceItemPhoto,
   deleteMaintenanceItemPhoto,
@@ -151,6 +152,25 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
             {showForm ? 'Cancel' : 'Sign Off Item'}
           </button>
         )}
+        {/* Edit an already signed-off item — change who did it / what was done */}
+        {isSupervisor && isSigned && (
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ fontSize: 11, flexShrink: 0 }}
+            onClick={() => {
+              if (!showForm) {
+                setForm({
+                  completed_date: item.completed_date ? String(item.completed_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+                  signed_by: item.signed_off_by || '',
+                  notes: item.notes || '',
+                });
+              }
+              setShowForm(s => !s);
+            }}
+          >
+            {showForm ? 'Cancel' : '✎ Edit'}
+          </button>
+        )}
 
         {/* Photo add button */}
         <div style={{ flexShrink: 0 }}>
@@ -173,8 +193,8 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
         </div>
       </div>
 
-      {/* ── Inline sign-off form ── */}
-      {showForm && !isSigned && (
+      {/* ── Inline sign-off / edit form ── */}
+      {showForm && (
         <div style={{ borderTop: '1px solid var(--border)', padding: '12px 14px', background: 'var(--bg-tertiary, #111)', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* Interval warning */}
           {warn && (
@@ -416,12 +436,7 @@ export default function PlannedMaintenance() {
     if (!signoffForm.completed_date) { toast.error('Completed date is required'); return; }
     if (!signoffForm.signed_by) { toast.error('Select who is authorizing this maintenance'); return; }
 
-    // Double sign-off check: authorizer must not be the same person who signed off any work item
-    const itemSigners = new Set((pm.items || []).map(it => it.signed_off_by).filter(Boolean));
-    if (itemSigners.has(signoffForm.signed_by)) {
-      toast.error(`${signoffForm.signed_by} already signed off work items — a different person must authorize the maintenance`);
-      return;
-    }
+    // Note: the final authorizer may be one of the people who did the work — this is allowed.
 
     setSaving(true);
     try {
@@ -708,6 +723,24 @@ ${pm.signoff_notes ? `
     }
   }
 
+  // ── Admin: unlock a completed record back to "planned" for full editing ────
+  async function handleUnlock(pm) {
+    if (!window.confirm(
+      `Unlock the completed maintenance for ${pm.bw_serial}?\n\nIt will move back to "Open Planned Maintenance" so you can change work items and what was done. All existing sign-offs, notes and photos are kept.`
+    )) return;
+    setSaving(true);
+    try {
+      const res = await unlockFleetPlannedMaintenance(pm.id);
+      setItems(prev => prev.map(e => e.id === pm.id ? res.data : e));
+      if (editingCompletedId === pm.id) setEditingCompletedId(null);
+      toast.success('Maintenance unlocked — now editable under Open Planned Maintenance');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to unlock');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="page">
@@ -739,7 +772,6 @@ ${pm.signoff_notes ? `
                   const pmItems = pm.items || [];
                   const allItemsSigned = pmItems.length > 0 && pmItems.every(i => i.signed_off);
                   const signedCount = pmItems.filter(i => i.signed_off).length;
-                  const itemSigners = new Set(pmItems.map(it => it.signed_off_by).filter(Boolean));
 
                   return (
                     <div key={pm.id} style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
@@ -872,16 +904,8 @@ ${pm.signoff_notes ? `
                             {allItemsSigned ? 'Authorize & Log Maintenance' : 'Sign Off Maintenance'}
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                            The authorizing person must be different from whoever signed off individual work items.
+                            Confirm the completion details and who is authorizing this maintenance.
                           </div>
-
-                          {/* Double-sign warning: list who signed items */}
-                          {itemSigners.size > 0 && (
-                            <div style={{ marginBottom: 12, padding: '8px 12px', background: 'rgba(59,130,246,0.08)', borderRadius: 6, border: '1px solid rgba(59,130,246,0.25)', fontSize: 12 }}>
-                              Work items signed by: <strong>{[...itemSigners].join(', ')}</strong>
-                              {' '}— the authorizer below must be a different person.
-                            </div>
-                          )}
 
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
                             <LabeledField label="Completed Date *">
@@ -905,23 +929,13 @@ ${pm.signoff_notes ? `
                               <select
                                 value={signoffForm.signed_by}
                                 onChange={e => setSignoffForm(f => ({ ...f, signed_by: e.target.value }))}
-                                style={{ borderColor: !signoffForm.signed_by ? 'var(--danger)' : (itemSigners.has(signoffForm.signed_by) ? '#f59e0b' : undefined) }}
+                                style={{ borderColor: !signoffForm.signed_by ? 'var(--danger)' : undefined }}
                               >
                                 <option value="">— Select authorizer —</option>
-                                {users.map(u => {
-                                  const isItemSigner = itemSigners.has(u.name);
-                                  return (
-                                    <option key={u.id} value={u.name} disabled={isItemSigner}>
-                                      {u.name}{isItemSigner ? ' (signed work items)' : ''}
-                                    </option>
-                                  );
-                                })}
+                                {users.map(u => (
+                                  <option key={u.id} value={u.name}>{u.name}</option>
+                                ))}
                               </select>
-                              {signoffForm.signed_by && itemSigners.has(signoffForm.signed_by) && (
-                                <span style={{ fontSize: 10, color: '#f59e0b', marginTop: -4 }}>
-                                  This person signed work items — must be a different person
-                                </span>
-                              )}
                             </LabeledField>
                           </div>
 
@@ -946,7 +960,7 @@ ${pm.signoff_notes ? `
                           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                             <button
                               className="btn btn-primary btn-sm"
-                              disabled={saving || !signoffForm.signed_by || itemSigners.has(signoffForm.signed_by)}
+                              disabled={saving || !signoffForm.signed_by}
                               onClick={() => handleSignoff(pm)}
                             >
                               {saving ? 'Saving…' : 'Confirm & Log to Aircraft'}
@@ -1172,6 +1186,15 @@ ${pm.signoff_notes ? `
                                 onClick={() => isEditingThis ? setEditingCompletedId(null) : openEditCompleted(pm)}
                               >
                                 {isEditingThis ? 'Cancel' : 'Edit'}
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                style={{ fontSize: 11, color: 'var(--accent)' }}
+                                onClick={() => handleUnlock(pm)}
+                                disabled={saving}
+                                title="Move back to Planned so work items and sign-offs can be changed"
+                              >
+                                🔓 Unlock
                               </button>
                               <button
                                 className="btn btn-ghost btn-sm"
