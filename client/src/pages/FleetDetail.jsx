@@ -79,8 +79,8 @@ const DEFAULT_COMPONENTS = ['Engine', 'Propeller', 'Governor', 'ECU', 'Fusebox']
 const EMPTY_CONTACT = { name: '', role: '', email: '', phone: '' };
 const EMPTY_EVENT   = { event_date: '', event_type: 'service', title: '', description: '', hours_at_event: '' };
 const EMPTY_COMPLETION = { completed_date: '', hours_at_completion: '', signed_by: '', notes: '' };
-const EMPTY_PLANNED_MAINTENANCE = { planned_arrival_date: '', assigned_technician_id: '', planned_comments: '', items: [] };
-const EMPTY_PM_ITEM = { template_id: '', title: '', description: '' };
+const EMPTY_PLANNED_MAINTENANCE = { planned_arrival_date: '', assigned_technicians: '', planned_comments: '', work_order_number: '', items: [] };
+const EMPTY_PM_ITEM = { template_id: '', title: '', description: '', work_category: 'normal' };
 
 // ─── CSS Flag icon — works cross-platform (no emoji needed) ──────────────────
 
@@ -721,12 +721,14 @@ function MaintenanceTab({
     try {
       const payload = {
         planned_arrival_date: plannedForm.planned_arrival_date,
-        assigned_technician_id: plannedForm.assigned_technician_id || null,
+        assigned_technicians: plannedForm.assigned_technicians || null,
         planned_comments: plannedForm.planned_comments || null,
+        work_order_number: plannedForm.work_order_number || null,
         items: plannedForm.items.map(item => ({
           template_id: item.template_id || null,
           title: item.title || '',
           description: item.description || null,
+          work_category: item.work_category || 'normal',
         })),
       };
       const res = await createFleetPlannedMaintenance(aircraft.id, payload);
@@ -786,16 +788,43 @@ function MaintenanceTab({
                   onChange={e => setPlannedForm(f => ({ ...f, planned_arrival_date: e.target.value }))}
                 />
               </FormField>
-              <FormField label="Assigned Technician" half>
-                <select
-                  value={plannedForm.assigned_technician_id}
-                  onChange={e => setPlannedForm(f => ({ ...f, assigned_technician_id: e.target.value }))}
-                >
-                  <option value="">— Unassigned —</option>
-                  {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
+              <FormField label="Assigned Technician(s)" half>
+                {(() => {
+                  const selected = new Set((plannedForm.assigned_technicians || '').split(',').map(s => s.trim()).filter(Boolean));
+                  const toggle = (name) => {
+                    const s = new Set(selected);
+                    s.has(name) ? s.delete(name) : s.add(name);
+                    setPlannedForm(f => ({ ...f, assigned_technicians: [...s].join(', ') }));
+                  };
+                  return (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {users.map(u => {
+                        const on = selected.has(u.name);
+                        return (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => toggle(u.name)}
+                            style={{
+                              fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer',
+                              border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                              background: on ? 'var(--accent)' : 'transparent',
+                              color: on ? '#fff' : 'var(--text-secondary)', fontWeight: on ? 700 : 400,
+                            }}
+                          >{on ? '✓ ' : ''}{u.name}</button>
+                        );
+                      })}
+                      {users.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>No users available</span>}
+                    </div>
+                  );
+                })()}
+              </FormField>
+              <FormField label="Work Order Number" half>
+                <input
+                  value={plannedForm.work_order_number}
+                  onChange={e => setPlannedForm(f => ({ ...f, work_order_number: e.target.value }))}
+                  placeholder="e.g. WO-2026-014"
+                />
               </FormField>
             </div>
 
@@ -842,22 +871,55 @@ function MaintenanceTab({
                         />
                       </div>
                     </div>
-                    <input
-                      value={item.description}
-                      onChange={e => setPlannedForm(f => {
-                        const items = [...f.items];
-                        items[idx] = { ...items[idx], description: e.target.value };
-                        return { ...f, items };
-                      })}
-                      placeholder="Additional notes (optional)"
-                      style={{ fontSize: 13 }}
-                    />
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <input
+                        value={item.description}
+                        onChange={e => setPlannedForm(f => {
+                          const items = [...f.items];
+                          items[idx] = { ...items[idx], description: e.target.value };
+                          return { ...f, items };
+                        })}
+                        placeholder="Additional notes (optional)"
+                        style={{ fontSize: 13, flex: '1 1 200px' }}
+                      />
+                      <div style={{ flex: '0 0 150px' }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>
+                          Billing
+                        </label>
+                        <select
+                          value={item.work_category || 'normal'}
+                          onChange={e => setPlannedForm(f => {
+                            const items = [...f.items];
+                            items[idx] = { ...items[idx], work_category: e.target.value };
+                            return { ...f, items };
+                          })}
+                        >
+                          <option value="normal">Normal (billable)</option>
+                          <option value="warranty">Warranty (no charge)</option>
+                        </select>
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, padding: '2px 4px', flexShrink: 0 }}
-                    onClick={() => setPlannedForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))}
-                    title="Remove item"
-                  >×</button>
+                  {/* Reorder + remove */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+                    <button
+                      style={{ background: 'none', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: idx === 0 ? 'var(--border)' : 'var(--text-secondary)', fontSize: 14, padding: '0 4px' }}
+                      disabled={idx === 0}
+                      onClick={() => setPlannedForm(f => { const its = [...f.items]; [its[idx-1], its[idx]] = [its[idx], its[idx-1]]; return { ...f, items: its }; })}
+                      title="Move up"
+                    >▲</button>
+                    <button
+                      style={{ background: 'none', border: 'none', cursor: idx === (plannedForm.items.length - 1) ? 'default' : 'pointer', color: idx === (plannedForm.items.length - 1) ? 'var(--border)' : 'var(--text-secondary)', fontSize: 14, padding: '0 4px' }}
+                      disabled={idx === (plannedForm.items.length - 1)}
+                      onClick={() => setPlannedForm(f => { const its = [...f.items]; [its[idx+1], its[idx]] = [its[idx], its[idx+1]]; return { ...f, items: its }; })}
+                      title="Move down"
+                    >▼</button>
+                    <button
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, padding: '2px 4px' }}
+                      onClick={() => setPlannedForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))}
+                      title="Remove item"
+                    >×</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -906,7 +968,7 @@ function MaintenanceTab({
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             Arrival: {fmtDate(pm.planned_arrival_date || pm.planned_date)}
-                            {pm.assigned_technician_name && ` · ${pm.assigned_technician_name}`}
+                            {(pm.assigned_technicians || pm.assigned_technician_name) && ` · ${pm.assigned_technicians || pm.assigned_technician_name}`}
                           </div>
                           {pm.items && pm.items.length > 0 && (
                             <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 13 }}>

@@ -616,6 +616,16 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS description TEXT NULL`,
   // Bulletins: target specific aircraft / airplane numbers (comma-separated list of bw_serial or aircraft_number)
   `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS aircraft_numbers VARCHAR(500) NULL`,
+  // Planned maintenance: customer-facing work order number
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS work_order_number VARCHAR(50) NULL`,
+  // Per work item: labor hours, warranty/normal billing category
+  `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS labor_hours DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_planned_maintenance_items ADD COLUMN IF NOT EXISTS work_category VARCHAR(20) NOT NULL DEFAULT 'normal'`,
+  // Planned maintenance: multiple assigned technicians (comma-separated names)
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS assigned_technicians VARCHAR(300) NULL`,
+  // CRM: add a "Nothing" option to status & priority enums
+  `ALTER TABLE customers MODIFY COLUMN status ENUM('none','new','contacted','waiting_reply','active_discussion','quote_sent','test_flight_planned','problem_support','closed_won','closed_lost','future_prospect') DEFAULT 'new'`,
+  `ALTER TABLE customers MODIFY COLUMN priority ENUM('none','low','medium','high','urgent') DEFAULT 'medium'`,
   // serial_number was originally NOT NULL but is optional (some components have no serial)
   `ALTER TABLE fleet_serial_numbers MODIFY COLUMN serial_number VARCHAR(200) NULL`,
   // Admin-managed component name list (per type), used as dropdown when adding components

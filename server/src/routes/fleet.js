@@ -136,15 +136,15 @@ const AIRCRAFT_SELECT = `
 `;
 
 const PLANNED_MAINTENANCE_SELECT = `
-  fpm.id, fpm.aircraft_id, fpm.template_id, fpm.customer_id,
+  fpm.id, fpm.aircraft_id, fpm.template_id, fpm.customer_id, fpm.work_order_number,
   fpm.planned_date, COALESCE(fpm.planned_arrival_date, fpm.planned_date) AS planned_arrival_date,
-  fpm.assigned_technician_id, fpm.planned_comments,
+  fpm.assigned_technician_id, fpm.assigned_technicians, fpm.planned_comments,
   fpm.status, fpm.completed_date, fpm.labor_hours, fpm.additional_work,
   fpm.signoff_notes, fpm.signed_off_by, fpm.signed_off_at, fpm.created_at,
   fst.title AS template_title, fst.category,
   fa.bw_serial, fa.registration, fa.model, fa.country_code, fa.total_hours_tsn AS aircraft_tsn,
   tech.name AS assigned_technician_name,
-  COALESCE(cust.full_name, fa.customer_name) AS customer_name
+  cust.full_name AS customer_name
 `;
 
 // ─── Components list (all serials across fleet) ──────────────────────────────
@@ -917,7 +917,7 @@ router.post('/:id/services', async (req, res) => {
 
 // POST /api/fleet/:id/planned-maintenance
 router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { planned_arrival_date, assigned_technician_id, planned_comments, items = [], customer_id } = req.body;
+  const { planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, items = [], customer_id, work_order_number } = req.body;
 
   if (!planned_arrival_date) {
     return res.status(400).json({ error: 'planned_arrival_date is required' });
@@ -931,18 +931,18 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
 
     const result = await query(
       `INSERT INTO fleet_planned_maintenance
-       (aircraft_id, customer_id, template_id, planned_date, planned_arrival_date, assigned_technician_id, planned_comments, planned_by)
-       VALUES (?,?,?,?,?,?,?,?)`,
+       (aircraft_id, customer_id, template_id, planned_date, planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, planned_by, work_order_number)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [req.params.id, customer_id || null, primaryTemplateId, planned_arrival_date, planned_arrival_date,
-       assigned_technician_id || null, planned_comments || null, req.user.id]
+       assigned_technician_id || null, assigned_technicians || null, planned_comments || null, req.user.id, work_order_number || null]
     );
 
     const plannedId = result.insertId;
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       await query(
-        `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
-        [plannedId, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
+        `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, work_category, sort_order) VALUES (?,?,?,?,?,?,?)`,
+        [plannedId, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, item.work_category || 'normal', i]
       );
     }
 
@@ -975,9 +975,10 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
 // ─── Per-item sign-off ────────────────────────────────────────────────────────
 // PUT /api/fleet/planned-maintenance/items/:itemId/signoff
 router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { signed_by, completed_date, notes } = req.body;
+  const { signed_by, completed_date, notes, labor_hours } = req.body;
   if (!completed_date) return res.status(400).json({ error: 'completed_date is required' });
   const safeDate = toDateOnly(completed_date);
+  const hrs = labor_hours != null && labor_hours !== '' ? parseFloat(labor_hours) : null;
 
   try {
     const itemRows = await query(
@@ -1015,9 +1016,9 @@ router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 's
     await query(
       `UPDATE fleet_planned_maintenance_items
        SET signed_off = 1, signed_off_by = ?, signed_off_at = CURRENT_TIMESTAMP,
-           completed_date = ?, notes = ?, signed_off_record_id = ?
+           completed_date = ?, notes = ?, labor_hours = ?, signed_off_record_id = ?
        WHERE id = ?`,
-      [techName, safeDate, notes || null, recordId, req.params.itemId]
+      [techName, safeDate, notes || null, hrs, recordId, req.params.itemId]
     );
 
     // Return updated item with photos
@@ -1080,7 +1081,7 @@ router.delete('/planned-maintenance/items/:itemId/photos/:photoId', requireRole(
 
 // PUT /api/fleet/planned-maintenance/:pid
 router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { planned_arrival_date, assigned_technician_id, planned_comments, items } = req.body;
+  const { planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, items, work_order_number, customer_id } = req.body;
   if (!planned_arrival_date) {
     return res.status(400).json({ error: 'planned_arrival_date is required' });
   }
@@ -1093,7 +1094,10 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
       'assigned_technician_id = ?', 'planned_comments = ?',
     ];
     const setValues = [planned_arrival_date, planned_arrival_date, assigned_technician_id || null, planned_comments || null];
+    if (assigned_technicians !== undefined) { setClauses.push('assigned_technicians = ?'); setValues.push(assigned_technicians || null); }
+    if (customer_id !== undefined) { setClauses.push('customer_id = ?'); setValues.push(customer_id || null); }
     if (primaryTemplateId !== undefined) { setClauses.push('template_id = ?'); setValues.push(primaryTemplateId); }
+    if (work_order_number !== undefined) { setClauses.push('work_order_number = ?'); setValues.push(work_order_number || null); }
 
     await query(
       `UPDATE fleet_planned_maintenance SET ${setClauses.join(', ')} WHERE id = ? AND status = 'planned'`,
@@ -1102,11 +1106,11 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
 
     if (items) {
       // Merge instead of wipe-and-recreate, so sign-offs, photos and notes are preserved.
-      const existing = await query('SELECT id, signed_off FROM fleet_planned_maintenance_items WHERE planned_id = ?', [req.params.pid]);
+      const existing = await query('SELECT id FROM fleet_planned_maintenance_items WHERE planned_id = ?', [req.params.pid]);
       const keepIds = items.filter(it => it.id).map(it => Number(it.id));
-      // Remove items the user deleted — but never delete a signed-off item (keep its history/photos)
+      // Remove items the user deleted (photos cascade). Items the user keeps retain their sign-off & notes.
       for (const ex of existing) {
-        if (!keepIds.includes(Number(ex.id)) && !ex.signed_off) {
+        if (!keepIds.includes(Number(ex.id))) {
           await query('DELETE FROM fleet_planned_maintenance_items WHERE id = ?', [ex.id]);
         }
       }
@@ -1116,14 +1120,14 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
           // Update only the descriptive fields — preserve signed_off, signed_off_by, notes, completed_date, photos
           await query(
             `UPDATE fleet_planned_maintenance_items
-             SET template_id = ?, title = ?, description = ?, assigned_technician_id = ?, sort_order = ?
+             SET template_id = ?, title = ?, description = ?, assigned_technician_id = ?, work_category = ?, sort_order = ?
              WHERE id = ? AND planned_id = ?`,
-            [item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i, item.id, req.params.pid]
+            [item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, item.work_category || 'normal', i, item.id, req.params.pid]
           );
         } else {
           await query(
-            `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, sort_order) VALUES (?,?,?,?,?,?)`,
-            [req.params.pid, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, i]
+            `INSERT INTO fleet_planned_maintenance_items (planned_id, template_id, title, description, assigned_technician_id, work_category, sort_order) VALUES (?,?,?,?,?,?,?)`,
+            [req.params.pid, item.template_id || null, item.title || '', item.description || null, item.assigned_technician_id || null, item.work_category || 'normal', i]
           );
         }
       }
@@ -1179,20 +1183,20 @@ router.delete('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), a
 
 // PATCH /api/fleet/planned-maintenance/:pid — admin-only edit of completed maintenance metadata
 router.patch('/planned-maintenance/:pid', requireRole('admin'), async (req, res) => {
-  const { completed_date, labor_hours, signoff_notes, additional_work, signed_off_by } = req.body;
+  const { completed_date, labor_hours, signoff_notes, additional_work, signed_off_by, work_order_number } = req.body;
   try {
+    const setClauses = ['completed_date = ?', 'labor_hours = ?', 'signoff_notes = ?', 'additional_work = ?', 'signed_off_by = ?'];
+    const vals = [
+      completed_date || null,
+      labor_hours != null && labor_hours !== '' ? parseFloat(labor_hours) : null,
+      signoff_notes || null,
+      additional_work || null,
+      signed_off_by || null,
+    ];
+    if (work_order_number !== undefined) { setClauses.push('work_order_number = ?'); vals.push(work_order_number || null); }
     await query(
-      `UPDATE fleet_planned_maintenance
-       SET completed_date = ?, labor_hours = ?, signoff_notes = ?, additional_work = ?, signed_off_by = ?
-       WHERE id = ? AND status = 'completed'`,
-      [
-        completed_date || null,
-        labor_hours != null && labor_hours !== '' ? parseFloat(labor_hours) : null,
-        signoff_notes || null,
-        additional_work || null,
-        signed_off_by || null,
-        req.params.pid,
-      ]
+      `UPDATE fleet_planned_maintenance SET ${setClauses.join(', ')} WHERE id = ? AND status = 'completed'`,
+      [...vals, req.params.pid]
     );
     const rows = await query(
       `SELECT ${PLANNED_MAINTENANCE_SELECT}

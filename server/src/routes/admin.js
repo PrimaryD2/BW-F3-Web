@@ -55,11 +55,16 @@ router.post('/users', async (req, res) => {
 
 // PUT /api/admin/users/:id
 router.put('/users/:id', async (req, res) => {
-  const { name, role, active, password } = req.body;
+  const { name, username, role, active, password } = req.body;
   try {
     const fields = [];
     const params = [];
     if (name !== undefined) { fields.push('name = ?'); params.push(name); }
+    if (username !== undefined) {
+      const uname = String(username || '').trim();
+      if (!uname) return res.status(400).json({ error: 'Username cannot be empty' });
+      fields.push('username = ?'); params.push(uname);
+    }
     if (role !== undefined) {
       const normalizedRole = normalizeRole(role);
       if (!VALID_ROLES.includes(normalizedRole)) return res.status(400).json({ error: 'Invalid role' });
@@ -80,6 +85,7 @@ router.put('/users/:id', async (req, res) => {
     );
     res.json(updated[0]);
   } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Username already exists' });
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }

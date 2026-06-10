@@ -12,6 +12,7 @@ import {
   uploadMaintenanceItemPhoto,
   deleteMaintenanceItemPhoto,
   getActiveUsers,
+  getCustomers,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -65,6 +66,7 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
     completed_date: new Date().toISOString().slice(0, 10),
     signed_by: '',
     notes: '',
+    labor_hours: '',
   });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -118,6 +120,9 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 13, color: isSigned ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: isSigned ? 'line-through' : 'none' }}>
             {item.title || item.template_title || '—'}
+            {item.work_category === 'warranty' && (
+              <span style={{ marginLeft: 6, fontSize: 9, padding: '1px 6px', borderRadius: 10, background: '#3b82f622', color: '#3b82f6', border: '1px solid #3b82f644', fontWeight: 700, verticalAlign: 'middle', textDecoration: 'none' }}>WARRANTY</span>
+            )}
           </div>
           {/* Template category / service type label */}
           {item.template_title && item.title && item.title !== item.template_title && (
@@ -135,6 +140,7 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
           {isSigned && (
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
               ✅ Done by <strong>{item.signed_off_by}</strong> on {fmtDate(item.completed_date)}
+              {item.labor_hours != null && <span> · {Number(item.labor_hours).toFixed(1)} h</span>}
               {item.notes && (
                 <div style={{ marginTop: 2, fontStyle: 'italic', color: 'var(--text-muted)' }}>Notes: {item.notes}</div>
               )}
@@ -163,6 +169,7 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
                   completed_date: item.completed_date ? String(item.completed_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
                   signed_by: item.signed_off_by || '',
                   notes: item.notes || '',
+                  labor_hours: item.labor_hours != null ? String(item.labor_hours) : '',
                 });
               }
               setShowForm(s => !s);
@@ -208,7 +215,7 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <LabeledField label="Date Completed *">
               <input
                 type="date"
@@ -216,22 +223,51 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
                 onChange={e => setForm(f => ({ ...f, completed_date: e.target.value }))}
               />
             </LabeledField>
-            <LabeledField label="Done By *">
-              <select
-                value={form.signed_by}
-                onChange={e => setForm(f => ({ ...f, signed_by: e.target.value }))}
-                style={{ borderColor: !form.signed_by ? 'var(--danger)' : undefined }}
-              >
-                <option value="">— Select employee —</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.name}>{u.name}</option>
-                ))}
-              </select>
-              {!form.signed_by && (
-                <span style={{ fontSize: 10, color: 'var(--danger)', marginTop: -4 }}>Required</span>
-              )}
+            <LabeledField label="Labor Hours">
+              <input
+                type="number" min="0" step="0.1"
+                value={form.labor_hours}
+                onChange={e => setForm(f => ({ ...f, labor_hours: e.target.value }))}
+                placeholder="0.0"
+              />
             </LabeledField>
           </div>
+          {/* Done By — one or more people */}
+          <LabeledField label="Done By * (select everyone who worked on it)">
+            {(() => {
+              const selected = new Set((form.signed_by || '').split(',').map(s => s.trim()).filter(Boolean));
+              const toggle = (name) => {
+                const s = new Set(selected);
+                s.has(name) ? s.delete(name) : s.add(name);
+                setForm(f => ({ ...f, signed_by: [...s].join(', ') }));
+              };
+              return (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {users.map(u => {
+                    const on = selected.has(u.name);
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => toggle(u.name)}
+                        style={{
+                          fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer',
+                          border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                          background: on ? 'var(--accent)' : 'transparent',
+                          color: on ? '#fff' : 'var(--text-secondary)', fontWeight: on ? 700 : 400,
+                        }}
+                      >
+                        {on ? '✓ ' : ''}{u.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {!form.signed_by && (
+              <span style={{ fontSize: 10, color: 'var(--danger)', marginTop: 4 }}>Select at least one person</span>
+            )}
+          </LabeledField>
           <LabeledField label="Notes — What Was Done">
             <textarea
               rows={3}
@@ -301,16 +337,20 @@ function emptyEditForm(item) {
     planned_arrival_date: item?.planned_arrival_date
       ? String(item.planned_arrival_date).slice(0, 10)
       : (item?.planned_date ? String(item.planned_date).slice(0, 10) : ''),
-    assigned_technician_id: item?.assigned_technician_id ? String(item.assigned_technician_id) : '',
+    assigned_technicians: item?.assigned_technicians || (item?.assigned_technician_name || ''),
+    customer_id: item?.customer_id ? String(item.customer_id) : '',
     planned_comments: item?.planned_comments || '',
+    work_order_number: item?.work_order_number || '',
     items: item?.items?.length
       ? item.items.map(i => ({
           id: i.id,
           template_id: i.template_id ? String(i.template_id) : '',
           title: i.title || '',
           description: i.description || '',
+          work_category: i.work_category || 'normal',
+          signed_off: i.signed_off,
         }))
-      : [{ template_id: '', title: '', description: '' }],
+      : [{ template_id: '', title: '', description: '', work_category: 'normal' }],
   };
 }
 
@@ -321,10 +361,11 @@ function emptyCompletedEditForm(item) {
     signoff_notes: item?.signoff_notes || '',
     additional_work: item?.additional_work || '',
     signed_off_by: item?.signed_off_by || '',
+    work_order_number: item?.work_order_number || '',
   };
 }
 
-const EMPTY_PM_ITEM = { template_id: '', title: '', description: '' };
+const EMPTY_PM_ITEM = { template_id: '', title: '', description: '', work_category: 'normal' };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Main page
@@ -337,6 +378,7 @@ export default function PlannedMaintenance() {
   const [items, setItems] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [users, setUsers] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openSignoffId, setOpenSignoffId] = useState(null);
   const [openEditId, setOpenEditId] = useState(null);
@@ -354,10 +396,11 @@ export default function PlannedMaintenance() {
     setLoading(true);
     try {
       // Use Promise.allSettled so a failed users call doesn't block PM data from loading
-      const [itemsRes, templatesRes, usersRes] = await Promise.allSettled([
+      const [itemsRes, templatesRes, usersRes, custRes] = await Promise.allSettled([
         getFleetPlannedMaintenance(),
         getFleetServiceTemplates(),
         getActiveUsers(),
+        getCustomers(),
       ]);
 
       if (itemsRes.status === 'fulfilled') setItems(itemsRes.value.data || []);
@@ -366,6 +409,8 @@ export default function PlannedMaintenance() {
       if (templatesRes.status === 'fulfilled') setTemplates(templatesRes.value.data || []);
 
       if (usersRes.status === 'fulfilled') setUsers(usersRes.value.data || []);
+
+      if (custRes.status === 'fulfilled') setCustomers(custRes.value.data || []);
     } catch {
       toast.error('Failed to load planned maintenance');
     } finally {
@@ -461,9 +506,11 @@ export default function PlannedMaintenance() {
     try {
       const payload = {
         planned_arrival_date: editForm.planned_arrival_date,
-        assigned_technician_id: editForm.assigned_technician_id || null,
+        assigned_technicians: editForm.assigned_technicians || null,
+        customer_id: editForm.customer_id || null,
         planned_comments: editForm.planned_comments || null,
-        items: editForm.items.map(i => ({ id: i.id || null, template_id: i.template_id || null, title: i.title || '', description: i.description || null })),
+        work_order_number: editForm.work_order_number || null,
+        items: editForm.items.map(i => ({ id: i.id || null, template_id: i.template_id || null, title: i.title || '', description: i.description || null, work_category: i.work_category || 'normal' })),
       };
       const res = await updateFleetPlannedMaintenance(pm.id, payload);
       setItems(prev => prev.map(e => e.id === pm.id ? res.data : e));
@@ -511,20 +558,29 @@ export default function PlannedMaintenance() {
     }
 
     const pmItems = pm.items || [];
+    const catBadge = (cat) => cat === 'warranty'
+      ? '<span style="font-size:9px;font-weight:700;color:#2563eb;border:1px solid #2563eb55;border-radius:8px;padding:1px 6px;">WARRANTY</span>'
+      : '<span style="font-size:9px;font-weight:700;color:#777;border:1px solid #ccc;border-radius:8px;padding:1px 6px;">Billable</span>';
     let rows;
+    let totalItemHours = 0;
     if (pmItems.length > 0) {
-      rows = pmItems.map((it, idx) => `
+      rows = pmItems.map((it, idx) => {
+        if (it.labor_hours != null) totalItemHours += Number(it.labor_hours);
+        return `
         <tr>
           <td style="width:24px;text-align:center;color:#999;font-size:10px">${idx + 1}</td>
           <td>
             <strong>${esc(it.title || it.template_title || '—')}</strong>
             ${it.description ? `<div style="font-size:10px;color:#777;margin-top:3px">${esc(it.description)}</div>` : ''}
           </td>
-          <td style="width:130px">${esc(it.signed_off_by || '—')}</td>
-          <td style="width:90px;white-space:nowrap">${it.completed_date ? fmtDate(it.completed_date) : '—'}</td>
+          <td style="width:120px">${esc(it.signed_off_by || '—')}</td>
+          <td style="width:80px;white-space:nowrap">${it.completed_date ? fmtDate(it.completed_date) : '—'}</td>
+          <td style="width:52px;text-align:right;white-space:nowrap">${it.labor_hours != null ? Number(it.labor_hours).toFixed(1) : '—'}</td>
+          <td style="width:78px;text-align:center">${catBadge(it.work_category)}</td>
           <td>${esc(it.notes || '—')}</td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     } else if (pm.template_title || pm.signoff_notes || pm.planned_comments) {
       // Fallback for older records that predate the per-item tracking feature
       rows = `
@@ -533,14 +589,19 @@ export default function PlannedMaintenance() {
           <td><strong>${esc(pm.template_title || pm.planned_comments || 'Maintenance completed')}</strong>
             ${pm.signoff_notes ? `<div style="font-size:10px;color:#777;margin-top:3px">${esc(pm.signoff_notes)}</div>` : ''}
           </td>
-          <td style="width:130px">${esc(pm.signed_off_by || '—')}</td>
-          <td style="width:90px;white-space:nowrap">${pm.completed_date ? fmtDate(pm.completed_date) : '—'}</td>
+          <td style="width:120px">${esc(pm.signed_off_by || '—')}</td>
+          <td style="width:80px;white-space:nowrap">${pm.completed_date ? fmtDate(pm.completed_date) : '—'}</td>
+          <td style="width:52px;text-align:right">—</td>
+          <td style="width:78px;text-align:center">—</td>
           <td>—</td>
         </tr>
       `;
     } else {
       rows = '';
     }
+    // Total labor: prefer summed item hours, fall back to the overall labor_hours field
+    const totalLabor = totalItemHours > 0 ? totalItemHours : (pm.labor_hours != null ? Number(pm.labor_hours) : null);
+    const woNumber = pm.work_order_number || `#${pm.id}`;
 
     const plannedDate   = fmtDate(pm.planned_arrival_date || pm.planned_date);
     const completedDate = fmtDate(pm.completed_date);
@@ -565,10 +626,22 @@ ${itemsWithPhotos.map(it => `
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Work Order #${pm.id} — ${esc(pm.bw_serial)}</title>
+<title>Work Order ${esc(woNumber)} — ${esc(pm.bw_serial)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #1a1a1a; padding: 18mm 20mm 15mm; }
+  /* ── Toolbar (screen only) ── */
+  .toolbar { position: fixed; top: 0; left: 0; right: 0; background: #1a1a1a; color: #fff; padding: 10px 16px;
+             display: flex; gap: 10px; align-items: center; justify-content: flex-end; z-index: 99; }
+  .toolbar button { font-size: 13px; padding: 7px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .toolbar .b-print { background: #3b82f6; color: #fff; }
+  .toolbar .b-close { background: #444; color: #fff; }
+  body.has-toolbar { padding-top: 64px; }
+  /* ── Brand logo (first row) ── */
+  .brand-row { margin-bottom: 14px; }
+  /* Logo art is white on transparent — invert renders it solid black for print */
+  .brand-row img { height: 34px; width: auto; filter: invert(1); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @media print { .toolbar { display: none !important; } body.has-toolbar { padding-top: 8mm; } }
   h2 { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #555;
        margin: 18px 0 6px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
   /* ── Document header ── */
@@ -623,16 +696,26 @@ ${itemsWithPhotos.map(it => `
   }
 </style>
 </head>
-<body>
+<body class="has-toolbar">
+
+<div class="toolbar">
+  <span style="margin-right:auto;font-size:12px;color:#bbb">Work Order ${esc(woNumber)} · BW-${esc(pm.bw_serial)}</span>
+  <button class="b-print" onclick="window.print()">🖨 Print / Save as PDF</button>
+  <button class="b-close" onclick="window.close()">Close</button>
+</div>
+
+<div class="brand-row">
+  <img src="${origin}/blackwing-logo.png" alt="Blackwing Sweden AB" />
+</div>
 
 <div class="doc-header">
   <div class="doc-title">
     <h1>Maintenance Work Order</h1>
-    <div class="sub">Blackwing Aircraft · Service Record</div>
+    <div class="sub">Service Record</div>
   </div>
   <div class="doc-ref">
     <strong>BW-${esc(pm.bw_serial)}</strong>${pm.registration ? ' · ' + esc(pm.registration) : ''}<br>
-    Work Order #${pm.id}<br>
+    Work Order ${esc(woNumber)}<br>
     Completed: ${completedDate}
   </div>
 </div>
@@ -655,11 +738,14 @@ ${itemsWithPhotos.map(it => `
       <th>Task</th>
       <th>Done By</th>
       <th>Date</th>
+      <th style="text-align:right">Hours</th>
+      <th style="text-align:center">Billing</th>
       <th>Notes</th>
     </tr>
   </thead>
   <tbody>
-    ${rows || '<tr><td colspan="5" style="text-align:center;color:#999;font-style:italic;padding:14px">No individual work items recorded for this entry</td></tr>'}
+    ${rows || '<tr><td colspan="7" style="text-align:center;color:#999;font-style:italic;padding:14px">No individual work items recorded for this entry</td></tr>'}
+    ${totalLabor != null ? `<tr><td colspan="4" style="text-align:right;font-weight:700;border-top:2px solid #ccc">Total Labor</td><td style="text-align:right;font-weight:700;border-top:2px solid #ccc">${totalLabor.toFixed(1)}</td><td colspan="2" style="border-top:2px solid #ccc"></td></tr>` : ''}
   </tbody>
 </table>
 
@@ -691,10 +777,8 @@ ${pm.signoff_notes ? `
 
 <div class="footer">
   <span>Blackwing Aircraft Management System</span>
-  <span>BW-${esc(pm.bw_serial)} · Work Order #${pm.id} · ${now}</span>
+  <span>BW-${esc(pm.bw_serial)} · Work Order ${esc(woNumber)} · ${now}</span>
 </div>
-
-<script>window.onload = function() { window.print(); };<\/script>
 </body>
 </html>`;
 
@@ -802,7 +886,7 @@ ${pm.signoff_notes ? `
                           {/* Date + technician */}
                           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             Arrival: <strong>{fmtDate(pm.planned_arrival_date || pm.planned_date)}</strong>
-                            {pm.assigned_technician_name && <> · Technician: <strong>{pm.assigned_technician_name}</strong></>}
+                            {(pm.assigned_technicians || pm.assigned_technician_name) && <> · Technician: <strong>{pm.assigned_technicians || pm.assigned_technician_name}</strong></>}
                           </div>
                           {/* Customer link */}
                           {pm.customer_name && (
@@ -982,16 +1066,50 @@ ${pm.signoff_notes ? `
                                 onChange={e => setEditForm(f => ({ ...f, planned_arrival_date: e.target.value }))}
                               />
                             </LabeledField>
-                            <LabeledField label="Assigned Technician" style={{ flex: '1 1 180px' }}>
+                            <LabeledField label="Work Order Number" style={{ flex: '1 1 180px' }}>
+                              <input
+                                value={editForm.work_order_number}
+                                onChange={e => setEditForm(f => ({ ...f, work_order_number: e.target.value }))}
+                                placeholder="e.g. WO-2026-014"
+                              />
+                            </LabeledField>
+                            <LabeledField label="Customer" style={{ flex: '1 1 180px' }}>
                               <select
-                                value={editForm.assigned_technician_id}
-                                onChange={e => setEditForm(f => ({ ...f, assigned_technician_id: e.target.value }))}
+                                value={editForm.customer_id}
+                                onChange={e => setEditForm(f => ({ ...f, customer_id: e.target.value }))}
                               >
-                                <option value="">— Unassigned —</option>
-                                {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                                <option value="">— None —</option>
+                                {customers.map(c => (
+                                  <option key={c.id} value={c.id}>{c.full_name}{c.company_name ? ` (${c.company_name})` : ''}</option>
+                                ))}
                               </select>
                             </LabeledField>
                           </div>
+                          <LabeledField label="Assigned Technician(s)" style={{ marginBottom: 12 }}>
+                            {(() => {
+                              const selected = new Set((editForm.assigned_technicians || '').split(',').map(s => s.trim()).filter(Boolean));
+                              const toggle = (name) => {
+                                const s = new Set(selected);
+                                s.has(name) ? s.delete(name) : s.add(name);
+                                setEditForm(f => ({ ...f, assigned_technicians: [...s].join(', ') }));
+                              };
+                              return (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {users.map(u => {
+                                    const on = selected.has(u.name);
+                                    return (
+                                      <button key={u.id} type="button" onClick={() => toggle(u.name)}
+                                        style={{ fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer',
+                                          border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                                          background: on ? 'var(--accent)' : 'transparent',
+                                          color: on ? '#fff' : 'var(--text-secondary)', fontWeight: on ? 700 : 400 }}
+                                      >{on ? '✓ ' : ''}{u.name}</button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
+                          </LabeledField>
 
                           <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Work Items</div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
@@ -1025,17 +1143,44 @@ ${pm.signoff_notes ? `
                                       />
                                     </div>
                                   </div>
-                                  <input
-                                    value={it.description}
-                                    onChange={e => setEditForm(f => { const its = [...f.items]; its[idx] = { ...its[idx], description: e.target.value }; return { ...f, items: its }; })}
-                                    placeholder="Instructions / what needs to be done (optional)"
-                                    style={{ fontSize: 13 }}
-                                  />
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                    <input
+                                      value={it.description}
+                                      onChange={e => setEditForm(f => { const its = [...f.items]; its[idx] = { ...its[idx], description: e.target.value }; return { ...f, items: its }; })}
+                                      placeholder="Instructions / what needs to be done (optional)"
+                                      style={{ fontSize: 13, flex: '1 1 200px' }}
+                                    />
+                                    <div style={{ flex: '0 0 150px' }}>
+                                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Billing</span>
+                                      <select
+                                        value={it.work_category || 'normal'}
+                                        onChange={e => setEditForm(f => { const its = [...f.items]; its[idx] = { ...its[idx], work_category: e.target.value }; return { ...f, items: its }; })}
+                                      >
+                                        <option value="normal">Normal (billable)</option>
+                                        <option value="warranty">Warranty (no charge)</option>
+                                      </select>
+                                    </div>
+                                  </div>
                                 </div>
-                                <button
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, padding: '2px 4px', flexShrink: 0 }}
-                                  onClick={() => setEditForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))}
-                                >×</button>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+                                  <button
+                                    style={{ background: 'none', border: 'none', cursor: idx === 0 ? 'default' : 'pointer', color: idx === 0 ? 'var(--border)' : 'var(--text-secondary)', fontSize: 14, padding: '0 4px' }}
+                                    disabled={idx === 0}
+                                    onClick={() => setEditForm(f => { const its = [...f.items]; [its[idx-1], its[idx]] = [its[idx], its[idx-1]]; return { ...f, items: its }; })}
+                                    title="Move up"
+                                  >▲</button>
+                                  <button
+                                    style={{ background: 'none', border: 'none', cursor: idx === (editForm.items.length - 1) ? 'default' : 'pointer', color: idx === (editForm.items.length - 1) ? 'var(--border)' : 'var(--text-secondary)', fontSize: 14, padding: '0 4px' }}
+                                    disabled={idx === (editForm.items.length - 1)}
+                                    onClick={() => setEditForm(f => { const its = [...f.items]; [its[idx+1], its[idx]] = [its[idx], its[idx+1]]; return { ...f, items: its }; })}
+                                    title="Move down"
+                                  >▼</button>
+                                  <button
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, padding: '2px 4px' }}
+                                    onClick={() => setEditForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }))}
+                                    title="Remove item"
+                                  >×</button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1152,6 +1297,11 @@ ${pm.signoff_notes ? `
 
                         {/* Dates + signer */}
                         <div style={{ minWidth: 160, flexShrink: 0, fontSize: 12 }}>
+                          {pm.work_order_number && (
+                            <div style={{ color: 'var(--text-primary)', fontWeight: 700, marginBottom: 2 }}>
+                              WO {pm.work_order_number}
+                            </div>
+                          )}
                           <div style={{ color: 'var(--text-secondary)' }}>
                             Planned: {fmtDate(pm.planned_arrival_date || pm.planned_date)}
                           </div>
@@ -1237,6 +1387,13 @@ ${pm.signoff_notes ? `
                                 <option value="">— Select person —</option>
                                 {users.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
                               </select>
+                            </LabeledField>
+                            <LabeledField label="Work Order Number">
+                              <input
+                                value={completedEditForm.work_order_number}
+                                onChange={e => setCompletedEditForm(f => ({ ...f, work_order_number: e.target.value }))}
+                                placeholder="e.g. WO-2026-014"
+                              />
                             </LabeledField>
                           </div>
                           <LabeledField label="Sign-off Notes" style={{ marginBottom: 10 }}>

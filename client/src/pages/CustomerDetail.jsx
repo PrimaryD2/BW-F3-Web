@@ -12,19 +12,21 @@ import { useAuth } from '../context/AuthContext';
 
 // ─── Label / colour maps ─────────────────────────────────────────────────────
 const STATUS_LABELS = {
+  none: 'Nothing',
   new: 'New', contacted: 'Contacted', waiting_reply: 'Waiting for Reply',
   active_discussion: 'Active Discussion', quote_sent: 'Quote Sent',
   test_flight_planned: 'Test Flight Planned', problem_support: 'Problem / Support',
   closed_won: 'Closed – Won', closed_lost: 'Closed – Lost', future_prospect: 'Future Prospect',
 };
 const STATUS_COLORS = {
+  none: '#94a3b8',
   new: '#6366f1', contacted: '#3b82f6', waiting_reply: '#f59e0b',
   active_discussion: '#22c55e', quote_sent: '#10b981', test_flight_planned: '#06b6d4',
   problem_support: '#ef4444', closed_won: '#22c55e', closed_lost: '#94a3b8',
   future_prospect: '#8b5cf6',
 };
-const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
-const PRIORITY_COLORS = { low: '#94a3b8', medium: '#3b82f6', high: '#f59e0b', urgent: '#ef4444' };
+const PRIORITY_LABELS = { none: 'Nothing', low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
+const PRIORITY_COLORS = { none: '#94a3b8', low: '#94a3b8', medium: '#3b82f6', high: '#f59e0b', urgent: '#ef4444' };
 
 const CONTACT_TYPE_LABELS = {
   email: 'Email', phone_call: 'Phone Call', whatsapp: 'WhatsApp', sms: 'SMS',
@@ -500,7 +502,7 @@ function CustomerForm({ initial, users, models, onSave, onCancel }) {
               <input type="text" value={form.preferred_language} onChange={e => set('preferred_language', e.target.value)} placeholder="English, German…" />
             </label>
             <div className="form-group" style={{ margin: 0 }}>
-              <FieldLabel>Interested Aircraft / Model</FieldLabel>
+              <FieldLabel>Aircraft / Model</FieldLabel>
               <AircraftSelect
                 value={form.interested_aircraft}
                 onChange={v => set('interested_aircraft', v)}
@@ -546,7 +548,7 @@ function CustomerForm({ initial, users, models, onSave, onCancel }) {
                 onChange={e => set('assigned_employee_id', e.target.value)}
               >
                 <option value="">— Unassigned —</option>
-                {users.filter(u => u.active).map(u => (
+                {users.map(u => (
                   <option key={u.id} value={String(u.id)}>{u.name}</option>
                 ))}
               </select>
@@ -1478,6 +1480,7 @@ export default function CustomerDetail() {
 
   async function handleCreateCustomer(form) {
     const res = await createCustomer(form);
+    setShowCustomerForm(false);
     navigate(`/customers/${res.data.id}`, { replace: true });
   }
 

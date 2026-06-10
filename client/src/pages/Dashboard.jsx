@@ -238,7 +238,7 @@ export default function Dashboard() {
                         ? `${p.items.length} item${p.items.length !== 1 ? 's' : ''}${p.template_title ? ` · ${p.template_title}` : ''}`
                         : (p.template_title || p.planned_comments || '—')}
                     </td>
-                    <td style={{ fontSize: 13 }}>{p.assigned_technician_name || '–'}</td>
+                    <td style={{ fontSize: 13 }}>{p.assigned_technicians || p.assigned_technician_name || '–'}</td>
                     <td style={{ fontSize: 13 }}>{p.customer_name || '–'}</td>
                   </tr>
                 ))}

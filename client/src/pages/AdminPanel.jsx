@@ -143,7 +143,7 @@ function UsersTab() {
   }
 
   function openCreate() { setForm({ name: '', username: '', password: '', role: 'worker' }); setError(''); setCreate(true); }
-  function openEdit(u)  { setForm({ name: u.name, role: u.role, active: u.active, password: '' }); setError(''); setEditUser(u); }
+  function openEdit(u)  { setForm({ name: u.name, username: u.username, role: u.role, active: u.active, password: '' }); setError(''); setEditUser(u); }
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -162,7 +162,7 @@ function UsersTab() {
     e.preventDefault();
     setSaving(true); setError('');
     try {
-      const payload = { name: form.name, role: form.role, active: form.active };
+      const payload = { name: form.name, username: form.username, role: form.role, active: form.active };
       if (form.password) payload.password = form.password;
       await updateUser(editUser.id, payload);
       toast.success('User updated.');
@@ -237,7 +237,10 @@ function UsersTab() {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-title">Edit User — {editUser.username}</div>
             <form onSubmit={handleUpdate}>
-              <div className="form-group"><label>Full Name</label><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+              <div className="form-row form-row-2">
+                <div className="form-group"><label>Full Name</label><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+                <div className="form-group"><label>Username</label><input value={form.username || ''} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} /></div>
+              </div>
               <div className="form-row form-row-2">
                 <div className="form-group">
                   <label>Role</label>
@@ -1657,9 +1660,12 @@ function BulletinsTab() {
   table{width:100%;border-collapse:collapse;margin-top:6px}
   th,td{padding:6px 8px;border:1px solid #ddd;text-align:left;font-size:11px}
   th{background:#f2f2f2;font-size:9px;text-transform:uppercase;letter-spacing:0.05em;color:#666}
+  .brand-row{margin-bottom:14px}
+  .brand-row img{height:34px;width:auto;filter:invert(1);-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .footer{margin-top:28px;border-top:1px solid #ddd;padding-top:7px;font-size:9px;color:#bbb;display:flex;justify-content:space-between}
   @media print{body{padding:8mm 12mm}@page{margin:8mm;size:A4}}
 </style></head><body>
+  <div class="brand-row"><img src="${window.location.origin}/blackwing-logo.png" alt="Blackwing Sweden AB" /></div>
   <div class="head">
     <div><h1>Service Bulletin</h1><div class="sub">Blackwing Aircraft</div></div>
     <div style="text-align:right"><span class="cat">${esc(meta.label)}</span><div class="sub" style="margin-top:6px">Issued: ${now}</div></div>
