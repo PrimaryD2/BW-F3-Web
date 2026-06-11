@@ -4,6 +4,7 @@ import { getCustomers, getCustomerFollowups, getActiveUsers } from '../api/index
 
 // ─── Label maps ──────────────────────────────────────────────────────────────
 const STATUS_LABELS = {
+  none: 'No Active Discussion',
   new: 'New',
   contacted: 'Contacted',
   waiting_reply: 'Waiting for Reply',
@@ -17,6 +18,7 @@ const STATUS_LABELS = {
 };
 
 const STATUS_COLORS = {
+  none: '#94a3b8',
   new: '#6366f1',
   contacted: '#3b82f6',
   waiting_reply: '#f59e0b',
@@ -29,8 +31,8 @@ const STATUS_COLORS = {
   future_prospect: '#8b5cf6',
 };
 
-const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
-const PRIORITY_COLORS = { low: '#94a3b8', medium: '#3b82f6', high: '#f59e0b', urgent: '#ef4444' };
+const PRIORITY_LABELS = { none: 'No Priority', low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
+const PRIORITY_COLORS = { none: '#94a3b8', low: '#94a3b8', medium: '#3b82f6', high: '#f59e0b', urgent: '#ef4444' };
 
 const CONTACT_TYPE_LABELS = {
   email: 'Email', phone_call: 'Phone', whatsapp: 'WhatsApp', sms: 'SMS',

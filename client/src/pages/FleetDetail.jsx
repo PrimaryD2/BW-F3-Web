@@ -333,7 +333,8 @@ function WBSection({ form, aircraft, canEdit, setF }) {
 
 // ─── Configuration Tab (top-level to avoid re-mount) ─────────────────────────
 
-function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
+function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle, singleSelectCategories }) {
+  const singleCats = singleSelectCategories || new Set();
   const grouped = configOptions.reduce((acc, o) => {
     if (!acc[o.category]) acc[o.category] = [];
     acc[o.category].push(o);
@@ -352,10 +353,13 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
-      {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => (
+      {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => {
+        const single = singleCats.has(cat);
+        return (
         <div key={cat} className="card">
           <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
             {cat}
+            {single && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: 'var(--accent)', textTransform: 'none', letterSpacing: 0 }}>(choose one)</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {opts.map(o => {
@@ -372,7 +376,8 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
                   }}
                 >
                   <input
-                    type="checkbox"
+                    type={single ? 'radio' : 'checkbox'}
+                    name={single ? `cfg-cat-${cat}` : undefined}
                     checked={checked}
                     onChange={() => canEdit && onToggle(o.id)}
                     disabled={!canEdit}
@@ -384,7 +389,8 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle }) {
             })}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1461,10 +1467,26 @@ export default function FleetDetail() {
     }
   }
 
+  const singleSelectCategories = React.useMemo(
+    () => new Set((fleetSettings.single_select_categories || '').split(',').map(s => s.trim()).filter(Boolean)),
+    [fleetSettings]
+  );
+
   function toggleConfigOption(optId) {
     setSelectedConfig(prev => {
       const next = new Set(prev);
-      if (next.has(optId)) next.delete(optId); else next.add(optId);
+      if (next.has(optId)) {
+        next.delete(optId);
+      } else {
+        // Single-select category: clear other options in the same category first
+        const opt = configOptions.find(o => Number(o.id) === Number(optId));
+        if (opt && singleSelectCategories.has(opt.category)) {
+          for (const o of configOptions) {
+            if (o.category === opt.category) next.delete(Number(o.id));
+          }
+        }
+        next.add(optId);
+      }
       return next;
     });
     setConfigDirty(true);
@@ -1623,6 +1645,121 @@ export default function FleetDetail() {
     const sheetName = `BW-${aircraft?.bw_serial || 'Components'}`;
     XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31)); // Excel sheet name limit
     XLSX.writeFile(wb, `Components_BW-${aircraft?.bw_serial || 'Aircraft'}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  // ─── Full aircraft export (print / PDF) — everything attached to the aircraft ──
+  function exportAircraftDocument() {
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Pop-up blocked — please allow pop-ups and try again'); return; }
+    const origin = window.location.origin;
+    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    const d = (v) => v ? new Date(v + (String(v).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+    const now = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const sect = (title, body) => body ? `<h2>${esc(title)}</h2>${body}` : '';
+    const rowsTable = (headers, rows) => rows.length
+      ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
+      : '<div class="empty">None recorded.</div>';
+
+    // Identity grid
+    const info = [
+      ['BW Serial', aircraft.bw_serial], ['Registration', aircraft.registration], ['Model', aircraft.model],
+      ['Build Status', (BUILD_STATUS_LABEL[aircraft.build_status] || aircraft.build_status)],
+      ['Owner / Customer', aircraft.customer_name], ['Country', aircraft.country_name],
+      ['First Flight', d(aircraft.first_flight_date)], ['Delivery', d(aircraft.delivery_date)],
+      ['Airworthiness', aircraft.airworthiness_status], ['Airworthiness Expiry', d(aircraft.airworthiness_expiry)],
+      ['Total Hours (TSN)', aircraft.total_hours_tsn != null ? aircraft.total_hours_tsn + ' h' : '—'],
+      ['Engine Hours', aircraft.engine_hours != null ? aircraft.engine_hours + ' h' : '—'],
+    ];
+    const infoGrid = `<div class="info-grid">${info.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v || '—')}</div></div>`).join('')}</div>`;
+
+    // Weight & toe-in
+    const wb = [];
+    if (aircraft.nose_wheel_weight != null) wb.push(['Nose wheel', aircraft.nose_wheel_weight + ' kg']);
+    if (aircraft.left_wheel_weight != null) wb.push(['Left main', aircraft.left_wheel_weight + ' kg']);
+    if (aircraft.right_wheel_weight != null) wb.push(['Right main', aircraft.right_wheel_weight + ' kg']);
+    if (aircraft.toe_in_left != null) wb.push(['Toe-in left', aircraft.toe_in_left + '°']);
+    if (aircraft.toe_in_right != null) wb.push(['Toe-in right', aircraft.toe_in_right + '°']);
+    const wbBody = wb.length ? `<div class="info-grid">${wb.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v)}</div></div>`).join('')}</div>` : '';
+
+    // Configuration (selected options grouped)
+    const selOpts = configOptions.filter(o => selectedConfig.has(Number(o.id)));
+    const byCat = selOpts.reduce((a, o) => { (a[o.category] ||= []).push(o); return a; }, {});
+    const configBody = Object.keys(byCat).length
+      ? Object.entries(byCat).map(([cat, opts]) => `<div class="cfg-cat"><strong>${esc(cat)}</strong>: ${opts.map(o => esc(o.label)).join(', ')}</div>`).join('')
+      : '';
+
+    // Components
+    const compRows = serials.filter(s => !s.uninstalled).map(s => `<tr>
+      <td>${esc(s.component_type || '—')}</td><td>${esc(s.component_name || s.component)}</td>
+      <td>${esc(s.serial_number || '—')}</td><td>${esc(s.software_version || '—')}</td>
+      <td>${d(s.date_installed)}</td><td>${d(s.expiry_date)}</td></tr>`);
+
+    // Events
+    const evRows = events.map(e => `<tr><td>${d(e.event_date)}</td><td>${esc(e.event_type)}</td><td>${esc(e.title)}</td><td>${esc(e.description || '')}</td></tr>`);
+
+    // Service records
+    const srRows = serviceRecords.map(r => `<tr><td>${d(r.completed_date)}</td><td>${esc(r.template_title || r.title || '—')}</td><td>${esc(r.signed_by || '—')}</td><td>${r.hours_at_completion != null ? r.hours_at_completion + ' h' : '—'}</td></tr>`);
+
+    // Planned/completed maintenance
+    const pmRows = plannedMaintenance.map(p => `<tr><td>${esc(p.work_order_number || ('#' + p.id))}</td><td>${esc(p.status)}</td><td>${d(p.planned_arrival_date || p.planned_date)}</td><td>${d(p.completed_date)}</td><td>${(p.items || []).map(i => esc(i.title || i.template_title)).join(', ')}</td></tr>`);
+
+    // Paint
+    const paintRows = paints.map(p => `<tr><td>${esc(p.color_name)}</td><td>${esc(p.paint_code || '—')}</td><td>${esc(p.area || '—')}</td></tr>`);
+
+    // Paperwork
+    const pwRows = paperwork.map(p => `<tr><td>${esc(p.title || p.original_name)}</td><td>${esc(p.category || '—')}</td><td>${d(p.uploaded_at)}</td></tr>`);
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Aircraft Record — BW-${esc(aircraft.bw_serial)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a;padding:16mm 18mm}
+  .toolbar{position:fixed;top:0;left:0;right:0;background:#1a1a1a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;justify-content:flex-end;z-index:99}
+  .toolbar button{font-size:13px;padding:7px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+  .b-print{background:#3b82f6;color:#fff}.b-close{background:#444;color:#fff}
+  body.has-toolbar{padding-top:60px}
+  .brand-row{margin-bottom:12px}
+  .brand-row img{height:32px;width:auto;filter:invert(1);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .doc-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #1a1a1a;padding-bottom:12px;margin-bottom:14px}
+  h1{font-size:19px;font-weight:800}.sub{font-size:10px;color:#777;margin-top:3px}
+  .doc-ref{text-align:right;font-size:11px;color:#555;line-height:1.6}.doc-ref strong{font-size:13px;color:#1a1a1a}
+  h2{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#555;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
+  .info-grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #ddd}
+  .info-cell{padding:6px 9px;border-right:1px solid #ddd;border-bottom:1px solid #ddd}
+  .info-cell label{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#999;display:block}
+  .info-cell .val{font-size:12px;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin-bottom:6px}
+  th,td{padding:5px 7px;border:1px solid #e0e0e0;text-align:left;font-size:10.5px;vertical-align:top}
+  th{background:#f2f2f2;font-size:8.5px;text-transform:uppercase;letter-spacing:0.04em;color:#666}
+  tbody tr:nth-child(even) td{background:#fafafa}
+  .cfg-cat{font-size:11px;margin-bottom:4px}
+  .empty{font-size:11px;color:#999;font-style:italic;padding:4px 0}
+  .footer{margin-top:24px;border-top:1px solid #ddd;padding-top:7px;font-size:9px;color:#bbb;display:flex;justify-content:space-between}
+  @media print{.toolbar{display:none!important}body.has-toolbar{padding-top:8mm}@page{margin:8mm;size:A4}}
+</style></head><body class="has-toolbar">
+  <div class="toolbar">
+    <span style="margin-right:auto;font-size:12px;color:#bbb">Aircraft Record · BW-${esc(aircraft.bw_serial)}</span>
+    <button class="b-print" onclick="window.print()">🖨 Print / Save as PDF</button>
+    <button class="b-close" onclick="window.close()">Close</button>
+  </div>
+  <div class="brand-row"><img src="${origin}/blackwing-logo.png" alt="Blackwing Sweden AB" /></div>
+  <div class="doc-header">
+    <div><h1>Aircraft Record</h1><div class="sub">Complete aircraft file</div></div>
+    <div class="doc-ref"><strong>BW-${esc(aircraft.bw_serial)}</strong>${aircraft.registration ? ' · ' + esc(aircraft.registration) : ''}<br>${esc(aircraft.model || '')}<br>Generated: ${now}</div>
+  </div>
+  ${sect('Aircraft', infoGrid)}
+  ${sect('Weight & Toe-in', wbBody)}
+  ${sect('Configuration', configBody)}
+  ${sect('Components', rowsTable(['Type', 'Component', 'Serial', 'SW Version', 'Installed', 'Expiry'], compRows))}
+  ${sect('Service History', rowsTable(['Date', 'Service', 'Signed By', 'Hours'], srRows))}
+  ${sect('Maintenance Work Orders', rowsTable(['WO', 'Status', 'Planned', 'Completed', 'Items'], pmRows))}
+  ${sect('Events', rowsTable(['Date', 'Type', 'Title', 'Description'], evRows))}
+  ${sect('Paint Codes', rowsTable(['Colour', 'Code', 'Area'], paintRows))}
+  ${sect('Paperwork', rowsTable(['Document', 'Category', 'Uploaded'], pwRows))}
+  <div class="footer"><span>Blackwing Sweden AB · Aircraft Management System</span><span>BW-${esc(aircraft.bw_serial)} · ${now}</span></div>
+</body></html>`;
+    w.document.write(html);
+    w.document.close();
   }
 
   // ─── Paints ────────────────────────────────────────────────────────────────
@@ -1901,6 +2038,9 @@ export default function FleetDetail() {
             </div>
           </div>
         </div>
+        <button className="btn btn-ghost" onClick={exportAircraftDocument} style={{ flexShrink: 0 }} title="Export the full aircraft file as a printable PDF">
+          ⬇ Export
+        </button>
         {canEdit && AIRCRAFT_EDIT_TABS.has(tab) && dirty && (
           <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ flexShrink: 0 }}>
             {saving ? 'Saving…' : '💾 Save Changes'}
@@ -2207,6 +2347,7 @@ export default function FleetDetail() {
           selectedConfig={selectedConfig}
           canEdit={canEdit}
           onToggle={toggleConfigOption}
+          singleSelectCategories={singleSelectCategories}
         />
       )}
 

@@ -612,8 +612,14 @@ const ALTER_STMTS = [
      ('toe_in_total_max', '2')`,
   // Config option: distinguish "preselected standard (changeable)" from "locked (always included)"
   `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Config option: weight delta (kg) shown in the configurator
+  `ALTER TABLE fleet_config_options ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(8,2) NULL`,
   // Aircraft model: customer-facing description shown in the configurator
   `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS description TEXT NULL`,
+  // Aircraft model: weight envelope + spec sheet (JSON array of {label,value}) for the configurator
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS mtom_kg DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS empty_weight_kg DECIMAL(8,2) NULL`,
+  `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS specs TEXT NULL`,
   // Bulletins: target specific aircraft / airplane numbers (comma-separated list of bw_serial or aircraft_number)
   `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS aircraft_numbers VARCHAR(500) NULL`,
   // Planned maintenance: customer-facing work order number
@@ -673,6 +679,79 @@ async function migrate() {
     for (const stmt of ALTER_STMTS) {
       await conn.query(stmt);
     }
+
+    // ── Seed configurator options + BW650 spec sheet (idempotent by label) ──
+    const optionalOpts = [
+      ['Cockpit & Comfort', '2× BOSE LEMO headset + Bluetooth adapter', 0],
+      ['Cockpit & Comfort', 'Toe Brakes Copilot side', 1.0],
+      ['Lighting, engine, pitot tube', 'Aveo Max Hercules BW landing lights', 0.8],
+      ['Lighting, engine, pitot tube', 'Underbody camera on the G3X (chassis view)', 0.2],
+      ['Lighting, engine, pitot tube', 'Engine preheating system', 0.5],
+      ['Avionics & Extras', 'Garmin Autopilot 2× GSA 28 + GMC 507 + ESP (prepared)', 1.8],
+      ['Avionics & Extras', 'Second Garmin G3X Touch', 2.0],
+      ['Avionics & Extras', 'Traffic Avoidance including ADS-B reception', 0.4],
+      ['Avionics & Extras', 'iPad holder', 0.2],
+      ['Avionics & Extras', 'ELT with remote panel', 0.7],
+      ['Avionics & Extras', 'Compass, SIRS including Form 1', 0.2],
+      ['Avionics & Extras', 'Garmin G5 EFIS Standby + battery pack', 0.3],
+      ['Avionics & Extras', 'Analog instrument (altimeter or airspeed indicator)', 0.3],
+      ['Avionics & Extras', 'Satellite Weather', 0.3],
+      ['Avionics & Extras', 'GHA 15 Height Radar Advisor', 0.5],
+      ['Avionics & Extras', 'Aithre Turbo 2-Place Oxygen (Portable)', 3.5],
+      ['Miscellaneous', 'Beringer rims in a different color', 0],
+      ['Miscellaneous', 'Paint scheme 2026', 0],
+    ];
+    const standardEquip = [
+      'Rotax 916 iS engine', '3-blade e-props propeller incl. controller', 'Garmin G3X Touch 10"',
+      'Garmin Audio Panel, Radio GTR205, XPDR GTX 335', 'Single Lever Power Control (automatic pitch)',
+      'Electric trim & flaps with Garmin display', 'Retractable landing gear with overload/ground protection',
+      'Vertical Power Electronic Circuit Breaker', 'BRS 1350 Softpack Rescue System',
+      'Beringer front and main wheels, tubeless', 'Titanium bolts (1 kg lighter)', 'AOA Garmin heated pitot tube',
+      'Aveo LED navigation/position/strobe', 'LiFePO4 battery + autom. Backup', 'Heated memory foam seats (Alcantara)',
+      'Cabin heating', 'Blackout certified canopy, lockable', 'Sliding windows left & right', 'Standard paint finish "Swoosh"',
+    ];
+    async function seedOption(category, label, weight, isLocked, sort) {
+      await conn.query(
+        `INSERT INTO fleet_config_options (category, label, weight_kg, is_locked, is_standard, show_in_configurator, sort_order)
+         SELECT ?, ?, ?, ?, 0, 1, ?
+         WHERE NOT EXISTS (SELECT 1 FROM fleet_config_options WHERE label = ?)`,
+        [category, label, weight, isLocked ? 1 : 0, sort, label]
+      );
+    }
+    for (let i = 0; i < optionalOpts.length; i++) {
+      const [cat, label, w] = optionalOpts[i];
+      await seedOption(cat, label, w, false, i);
+    }
+    for (let i = 0; i < standardEquip.length; i++) {
+      await seedOption('Standard Equipment', standardEquip[i], 0, true, i);
+    }
+
+    // BW650 spec sheet + weight envelope (only fills blanks — never overwrites admin edits)
+    const bw650Specs = JSON.stringify([
+      { label: 'Engine Max Power', value: '160 hp (Rotax 916 iS)' },
+      { label: 'VNE TAS SL', value: '173 kts (320 km/h)' },
+      { label: 'VNE TAS FL95', value: '200 kts (370 km/h)' },
+      { label: 'Cruise Speed 65% FL95', value: '190 kts (352 km/h)' },
+      { label: 'Stall Speed', value: '38 kts (70 km/h)' },
+      { label: 'Fuel tank', value: '140 L (5.5 h at 65%)' },
+      { label: 'Takeoff / Landing*', value: '175 m / 290 m' },
+      { label: 'Climb Rate', value: '2500 ft/min' },
+      { label: 'Cabin Width', value: '1.21 m (47.5")' },
+      { label: 'Max Tow (MTOM)', value: '600 kg' },
+      { label: 'Standard unladen weight', value: '371 kg' },
+      { label: 'Wingspan', value: '8.4 m (27.5 ft)' },
+      { label: 'Load factor', value: '+4.4 / −2.2 G' },
+      { label: 'Certification', value: 'DULV type certification 07.03.2025 · *Landing with a 50 ft obstacle' },
+    ]);
+    await conn.query(
+      `UPDATE fleet_models
+       SET mtom_kg = COALESCE(mtom_kg, 600),
+           empty_weight_kg = COALESCE(empty_weight_kg, 371),
+           specs = COALESCE(specs, ?)
+       WHERE name = 'BW650'`,
+      [bw650Specs]
+    );
+
     console.log('✅ Migration completed successfully.');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

@@ -12,7 +12,7 @@ import { useAuth } from '../context/AuthContext';
 
 // ─── Label / colour maps ─────────────────────────────────────────────────────
 const STATUS_LABELS = {
-  none: 'Nothing',
+  none: 'No Active Discussion',
   new: 'New', contacted: 'Contacted', waiting_reply: 'Waiting for Reply',
   active_discussion: 'Active Discussion', quote_sent: 'Quote Sent',
   test_flight_planned: 'Test Flight Planned', problem_support: 'Problem / Support',
@@ -25,7 +25,7 @@ const STATUS_COLORS = {
   problem_support: '#ef4444', closed_won: '#22c55e', closed_lost: '#94a3b8',
   future_prospect: '#8b5cf6',
 };
-const PRIORITY_LABELS = { none: 'Nothing', low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
+const PRIORITY_LABELS = { none: 'No Priority', low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
 const PRIORITY_COLORS = { none: '#94a3b8', low: '#94a3b8', medium: '#3b82f6', high: '#f59e0b', urgent: '#ef4444' };
 
 const CONTACT_TYPE_LABELS = {
@@ -162,7 +162,7 @@ function baseLog() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Log entry card (read-only display)
 // ═══════════════════════════════════════════════════════════════════════════════
-function LogCard({ log, onEdit, onDelete, isAdmin }) {
+function LogCard({ log, onEdit, onDelete, onResolveFollowup, isAdmin }) {
   const statusColor = ENTRY_STATUS_COLORS[log.entry_status] || '#94a3b8';
   const isOverdue = log.follow_up_needed && log.follow_up_date &&
     new Date(log.follow_up_date) < new Date() &&
@@ -228,7 +228,7 @@ function LogCard({ log, onEdit, onDelete, isAdmin }) {
       )}
 
       {/* ── Follow-up strip ── */}
-      {log.follow_up_needed && (
+      {!!log.follow_up_needed && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
           background: isOverdue ? '#ef444420' : '#f59e0b18',
@@ -241,6 +241,15 @@ function LogCard({ log, onEdit, onDelete, isAdmin }) {
           </span>
           {log.follow_up_responsible && (
             <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>→ {log.follow_up_responsible}</span>
+          )}
+          {onResolveFollowup && (
+            <button
+              className="btn btn-sm"
+              style={{ marginLeft: 'auto', fontSize: 11, background: '#22c55e', color: '#fff', border: 'none', padding: '3px 10px' }}
+              onClick={() => onResolveFollowup(log)}
+            >
+              ✓ Mark follow-up done
+            </button>
           )}
         </div>
       )}
@@ -688,6 +697,21 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
   const hasPricing = basePrice != null || selectedOptionsList.some(o => o.price != null);
   const fmtEur = (n) => Number(n).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ── Weight & payload ─────────────────────────────────────────────────────────
+  const emptyWeightBase = selectedModel?.empty_weight_kg != null ? Number(selectedModel.empty_weight_kg) : null;
+  const mtom = selectedModel?.mtom_kg != null ? Number(selectedModel.mtom_kg) : null;
+  const additionalWeight = selectedOptionsList.reduce((s, o) => s + (o.weight_kg != null ? Number(o.weight_kg) : 0), 0);
+  const estEmptyWeight = emptyWeightBase != null ? emptyWeightBase + additionalWeight : null;
+  const remainingPayload = (mtom != null && estEmptyWeight != null) ? mtom - estEmptyWeight : null;
+  const payloadPct = (mtom && estEmptyWeight != null) ? Math.min(100, Math.max(0, (estEmptyWeight / mtom) * 100)) : null;
+  const modelSpecs = (() => {
+    const s = selectedModel?.specs;
+    if (Array.isArray(s)) return s;
+    if (!s) return [];
+    try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; }
+  })();
+  const fmtKg = (n) => `${Number(n).toLocaleString('de-DE', { maximumFractionDigits: 1 })} kg`;
+
   function toggleOption(id) {
     const nid = Number(id);
     if (lockedOptionIds.has(nid)) return; // locked — cannot be changed
@@ -936,9 +960,16 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
                               )}
                             </span>
                           </div>
-                          {opt.price != null && (
-                            <div style={{ fontSize: 11, fontWeight: 700, color: sel ? color : 'var(--text-muted)', paddingLeft: 24 }}>
-                              {Number(opt.price) === 0 ? 'Included' : `+€${Number(opt.price).toLocaleString('de-DE')}`}
+                          {(opt.price != null || opt.weight_kg != null) && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, paddingLeft: 24 }}>
+                              {opt.price != null
+                                ? <span style={{ fontSize: 11, fontWeight: 700, color: sel ? color : 'var(--text-muted)' }}>{Number(opt.price) === 0 ? 'Included' : `+€${Number(opt.price).toLocaleString('de-DE')}`}</span>
+                                : <span />}
+                              {opt.weight_kg != null && (
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                  {Number(opt.weight_kg) === 0 ? '±0 kg' : `${Number(opt.weight_kg) > 0 ? '+' : ''}${Number(opt.weight_kg)} kg`}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -950,49 +981,94 @@ function ConfiguratorModal({ initial, models, configOptions, onSave, onCancel })
             })}
           </div>
 
-          {/* Live price summary panel */}
-          {hasPricing && (
-            <div style={{
-              width: 210, flexShrink: 0,
-              border: '1px solid var(--border)', borderRadius: 12,
-              padding: '16px 16px', background: 'var(--bg-tertiary, #111)',
-              position: 'sticky', top: 0,
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
-                Price Summary
+          {/* Your configuration — weight, payload & price */}
+          <div style={{
+            width: 240, flexShrink: 0,
+            border: '1px solid var(--border)', borderRadius: 12,
+            padding: '16px', background: 'var(--bg-tertiary, #111)',
+            position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: 14,
+          }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#3b82f6', marginBottom: 2 }}>Your configuration</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {selectedOptionsList.filter(o => !lockedOptionIds.has(Number(o.id))).length} option(s) selected (plus standard)
               </div>
-              {basePrice != null && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 5, color: 'var(--text-secondary)' }}>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingRight: 6 }}>
-                    Base ({selectedModel?.name})
-                  </span>
-                  <span style={{ fontWeight: 600, flexShrink: 0 }}>€{Number(basePrice).toLocaleString('de-DE')}</span>
+            </div>
+
+            {/* Weight & payload */}
+            {estEmptyWeight != null && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <span>Standard empty weight</span><span>{fmtKg(emptyWeightBase)}</span>
                 </div>
-              )}
-              {selectedOptionsList.filter(o => o.price != null && Number(o.price) > 0).map(o => (
-                <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3, color: 'var(--text-muted)' }}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 6 }}>{o.label}</span>
-                  <span style={{ fontWeight: 600, flexShrink: 0 }}>+€{Number(o.price).toLocaleString('de-DE')}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <span>Additional options</span><span>+ {fmtKg(additionalWeight)}</span>
                 </div>
-              ))}
-              <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  <span>Ex-VAT</span>
-                  <span>€{fmtEur(subtotal)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>
+                  <span>Estimated empty weight</span><span style={{ color: '#3b82f6' }}>{fmtKg(estEmptyWeight)}</span>
+                </div>
+                {mtom != null && (
+                  <>
+                    <div style={{ height: 8, borderRadius: 5, background: 'var(--bg-secondary)', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      <div style={{ height: '100%', width: `${payloadPct}%`, background: remainingPayload < 0 ? '#ef4444' : '#3b82f6' }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
+                      <span>empty weight</span><span>MTOM {fmtKg(mtom)}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: remainingPayload < 0 ? '#ef4444' : 'var(--text-secondary)', marginTop: 6 }}>
+                      {remainingPayload < 0
+                        ? `⚠ Over MTOM by ${fmtKg(-remainingPayload)}`
+                        : `Remaining payload approx. ${fmtKg(remainingPayload)} (pilot, co-pilot, luggage, fuel). Approximate values.`}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Price */}
+            {hasPricing && (
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Price</div>
+                {basePrice != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingRight: 6 }}>Base ({selectedModel?.name})</span>
+                    <span style={{ fontWeight: 600 }}>€{Number(basePrice).toLocaleString('de-DE')}</span>
+                  </div>
+                )}
+                {optionsTotal > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
+                    <span>Options</span><span style={{ fontWeight: 600 }}>+€{optionsTotal.toLocaleString('de-DE')}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginTop: 4 }}>
+                  <span>Ex-VAT</span><span>€{fmtEur(subtotal)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-                  <span>VAT ({vatPct}%)</span>
-                  <span>€{fmtEur(vatAmount)}</span>
+                  <span>VAT ({vatPct}%)</span><span>€{fmtEur(vatAmount)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 800, color: '#3b82f6', borderTop: '1px solid #3b82f640', paddingTop: 6, marginTop: 2 }}>
-                  <span>Inc-VAT</span>
-                  <span>€{fmtEur(totalWithVat)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 800, color: '#3b82f6', borderTop: '1px solid #3b82f640', paddingTop: 6 }}>
+                  <span>Inc-VAT</span><span>€{fmtEur(totalWithVat)}</span>
                 </div>
               </div>
-              <div style={{ marginTop: 10, fontSize: 10, color: 'var(--text-muted)' }}>VAT rate editable in Step 3.</div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
+
+        {/* Specifications */}
+        {modelSpecs.length > 0 && (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{selectedModel?.name} — Specifications</div>
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              {modelSpecs.map((sp, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 14px', fontSize: 13,
+                  borderTop: i > 0 ? '1px solid var(--border)' : 'none', background: i % 2 ? 'var(--bg-secondary)' : 'transparent' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{sp.label}</span>
+                  <span style={{ fontWeight: 600, textAlign: 'right' }}>{sp.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1437,6 +1513,10 @@ export default function CustomerDetail() {
   const [editingLog, setEditingLog] = useState(null);
   const [bookings, setBookings] = useState([]);
   const [showBookService, setShowBookService] = useState(false);
+  // Resolve-follow-up modal
+  const [resolveTarget, setResolveTarget] = useState(null);
+  const [resolveOutcome, setResolveOutcome] = useState('');
+  const [resolveSaving, setResolveSaving] = useState(false);
   const [quotes, setQuotes] = useState([]);
   const [configOptions, setConfigOptions] = useState([]);
   const [showConfigurator, setShowConfigurator] = useState(false);
@@ -1547,6 +1627,40 @@ export default function CustomerDetail() {
   async function handleDeleteLog(logId) {
     if (!window.confirm('Delete this log entry?')) return;
     await deleteCustomerLog(id, logId);
+    await loadCustomer();
+  }
+
+  async function confirmResolveFollowup() {
+    if (!resolveTarget) return;
+    setResolveSaving(true);
+    try {
+      await doResolveFollowup(resolveTarget, resolveOutcome.trim());
+      setResolveTarget(null);
+      setResolveOutcome('');
+    } finally {
+      setResolveSaving(false);
+    }
+  }
+
+  // Resolve a follow-up: record an outcome, clear the follow-up flag and close the entry
+  // so it drops off the overdue/followup notifications.
+  async function doResolveFollowup(log, outcome) {
+    const payload = {
+      date_time: localDatetimeValue(log.date_time),
+      contact_type: log.contact_type,
+      category: log.category,
+      title: log.title,
+      detailed_notes: outcome
+        ? `${log.detailed_notes ? log.detailed_notes + '\n\n' : ''}✅ Follow-up outcome (${formatDate(new Date())}): ${outcome}`
+        : log.detailed_notes,
+      customer_question: log.customer_question,
+      blackwing_answer: log.blackwing_answer,
+      follow_up_needed: false,
+      follow_up_date: log.follow_up_date ? String(log.follow_up_date).slice(0, 10) : null,
+      follow_up_responsible: log.follow_up_responsible,
+      entry_status: 'solved',
+    };
+    await updateCustomerLog(id, log.id, payload);
     await loadCustomer();
   }
 
@@ -1785,13 +1899,6 @@ export default function CustomerDetail() {
       </div>
 
       {/* ── Booked Services ── */}
-      {bookings.length === 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <button className="btn btn-ghost btn-sm" style={{ fontSize: 12, color: 'var(--text-secondary)' }} onClick={() => setShowBookService(true)}>
-            + Book a service / maintenance for this customer
-          </button>
-        </div>
-      )}
       {bookings.length > 0 && (
         <div className="card" style={{ marginBottom: 20, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -1877,7 +1984,7 @@ export default function CustomerDetail() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {logs.map(log => (
-            <LogCard key={log.id} log={log} onEdit={openEditLog} onDelete={handleDeleteLog} isAdmin={isAdmin} />
+            <LogCard key={log.id} log={log} onEdit={openEditLog} onDelete={handleDeleteLog} onResolveFollowup={(l) => { setResolveTarget(l); setResolveOutcome(''); }} isAdmin={isAdmin} />
           ))}
         </div>
       )}
@@ -1922,6 +2029,49 @@ export default function CustomerDetail() {
           onSend={handleSendEmail}
           onCancel={() => { setShowSendEmail(false); setSendEmailQuote(null); }}
         />
+      )}
+
+      {/* ── Resolve follow-up modal ── */}
+      {resolveTarget && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => !resolveSaving && setResolveTarget(null)}
+        >
+          <div
+            style={{ background: 'var(--bg-secondary)', borderRadius: 14, width: '100%', maxWidth: 460, padding: '26px 28px' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <span style={{ width: 34, height: 34, borderRadius: '50%', background: '#22c55e22', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>✓</span>
+              <div style={{ fontWeight: 800, fontSize: 17 }}>Complete Follow-up</div>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
+              Marking <strong>“{resolveTarget.title}”</strong> as done. Add what happened (optional) — it's saved to the log and the reminder is cleared.
+            </div>
+            <label className="form-group" style={{ margin: 0 }}>
+              <FieldLabel>Outcome</FieldLabel>
+              <textarea
+                rows={4}
+                autoFocus
+                value={resolveOutcome}
+                onChange={e => setResolveOutcome(e.target.value)}
+                placeholder='e.g. "Called customer back — quote accepted, moving to contract."'
+                style={{ resize: 'vertical' }}
+              />
+            </label>
+            <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button className="btn btn-ghost" disabled={resolveSaving} onClick={() => setResolveTarget(null)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                style={{ background: '#22c55e', borderColor: '#22c55e' }}
+                disabled={resolveSaving}
+                onClick={confirmResolveFollowup}
+              >
+                {resolveSaving ? 'Saving…' : '✓ Mark Done'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

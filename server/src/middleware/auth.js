@@ -1,7 +1,12 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'f3-production-secret-key-change-in-prod';
+// In production a real secret MUST be supplied — never fall back to a public default.
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET is not set in production. Refusing to start with an insecure default.');
+  process.exit(1);
+}
+const JWT_SECRET = process.env.JWT_SECRET || 'f3-dev-only-secret-not-for-production';
 
 function generateToken(user) {
   return jwt.sign(

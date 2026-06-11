@@ -4,6 +4,9 @@ import { getFleetGallery } from '../api';
 
 const SCROLL_KEY = 'aircraft_gallery_scroll_y';
 
+// Module-level cache so re-entering the page shows instantly (no reload flash)
+let galleryCache = null;
+
 const BUILD_STATUS_LABELS = {
   in_production: 'In Production',
   completed: 'Completed',
@@ -40,8 +43,8 @@ function uniqueOptions(items, pick) {
 
 export default function AircraftGallery() {
   const navigate = useNavigate();
-  const [aircraft, setAircraft] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [aircraft, setAircraft] = useState(galleryCache || []);
+  const [loading, setLoading] = useState(!galleryCache);
   const [filters, setFilters] = useState({
     engine: 'all',
     model: 'all',
@@ -50,8 +53,9 @@ export default function AircraftGallery() {
   });
 
   useEffect(() => {
+    // Refresh in the background; show cached data immediately if we have it
     getFleetGallery()
-      .then((res) => setAircraft(res.data || []))
+      .then((res) => { galleryCache = res.data || []; setAircraft(galleryCache); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -164,8 +168,10 @@ export default function AircraftGallery() {
                 <div style={{ position: 'relative', height: 200, background: 'var(--bg-tertiary, #1a1a1a)', flexShrink: 0 }}>
                   {item.cover_image ? (
                     <img
-                      src={`/uploads/fleet/${item.cover_image}`}
+                      src={`/uploads/thumb/fleet/${item.cover_image}`}
                       alt={item.bw_serial}
+                      loading="lazy"
+                      decoding="async"
                       style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                     />
                   ) : (

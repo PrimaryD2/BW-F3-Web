@@ -812,15 +812,48 @@ function FleetConfigTab() {
   const [loading, setLoading]   = useState(true);
   const [editId,  setEditId]    = useState(null);   // option id being edited
   const [editForm, setEditForm] = useState({});
-  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', show_in_configurator: true });
+  const [addForm,  setAddForm]  = useState({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', weight_kg: '', show_in_configurator: true });
   const [saving,   setSaving]   = useState(false);
+  const [singleCats, setSingleCats] = useState(new Set());
+  const [catOrder, setCatOrder] = useState([]);
 
-  useEffect(() => { loadOptions(); }, []);
+  useEffect(() => { loadOptions(); loadSettings(); }, []);
 
   async function loadOptions() {
     setLoading(true);
     try { const r = await getFleetConfigOptions(); setOptions(r.data); }
     finally { setLoading(false); }
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await getAdminSettings();
+      const list = (r.data?.single_select_categories || '').split(',').map(s => s.trim()).filter(Boolean);
+      setSingleCats(new Set(list));
+      setCatOrder((r.data?.config_category_order || '').split(',').map(s => s.trim()).filter(Boolean));
+    } catch { /* ignore */ }
+  }
+
+  async function toggleSingleCat(cat) {
+    const next = new Set(singleCats);
+    next.has(cat) ? next.delete(cat) : next.add(cat);
+    setSingleCats(next);
+    try {
+      await updateAdminSettings({ single_select_categories: [...next].join(',') });
+      toast.success(`${cat} is now ${next.has(cat) ? 'single-select' : 'multi-select'}`);
+    } catch (err) { toast.error('Failed to save'); loadSettings(); }
+  }
+
+  // Move a whole category up/down and persist the order
+  async function moveCategory(cat, dir) {
+    const cats = orderedCategories();
+    const i = cats.indexOf(cat);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= cats.length) return;
+    [cats[i], cats[j]] = [cats[j], cats[i]];
+    setCatOrder(cats);
+    try { await updateAdminSettings({ config_category_order: cats.join(',') }); }
+    catch { toast.error('Failed to save order'); loadSettings(); }
   }
 
   // Group by category
@@ -830,15 +863,23 @@ function FleetConfigTab() {
     return acc;
   }, {});
 
+  // Categories ordered by the saved order first, then any remaining alphabetically
+  function orderedCategories() {
+    const present = Object.keys(grouped);
+    const inOrder = catOrder.filter(c => present.includes(c));
+    const rest = present.filter(c => !inOrder.includes(c)).sort((a, b) => a.localeCompare(b));
+    return [...inOrder, ...rest];
+  }
+
   async function handleAdd(e) {
     e.preventDefault();
     const cat = addForm.category === '__custom__' ? addForm.custom_category.trim() : addForm.category;
     if (!cat || !addForm.label.trim()) { toast.error('Category and label are required'); return; }
     setSaving(true);
     try {
-      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order, is_standard: addForm.is_standard, is_locked: addForm.is_locked, price: addForm.price !== '' ? Number(addForm.price) : null, show_in_configurator: addForm.show_in_configurator });
+      const r = await createFleetConfigOption({ category: cat, label: addForm.label.trim(), sort_order: addForm.sort_order, is_standard: addForm.is_standard, is_locked: addForm.is_locked, price: addForm.price !== '' ? Number(addForm.price) : null, weight_kg: addForm.weight_kg !== '' ? Number(addForm.weight_kg) : null, show_in_configurator: addForm.show_in_configurator });
       setOptions(o => [...o, r.data].sort((a,b) => a.category.localeCompare(b.category) || a.sort_order - b.sort_order || a.label.localeCompare(b.label)));
-      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', show_in_configurator: true });
+      setAddForm({ category: '', custom_category: '', label: '', sort_order: 0, is_standard: false, is_locked: false, price: '', weight_kg: '', show_in_configurator: true });
       toast.success('Option added');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to add');
@@ -847,7 +888,7 @@ function FleetConfigTab() {
 
   function startEdit(o) {
     setEditId(o.id);
-    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order, is_standard: !!o.is_standard, is_locked: !!o.is_locked, price: o.price != null ? String(o.price) : '', show_in_configurator: o.show_in_configurator !== false });
+    setEditForm({ category: o.category, label: o.label, sort_order: o.sort_order, is_standard: !!o.is_standard, is_locked: !!o.is_locked, price: o.price != null ? String(o.price) : '', weight_kg: o.weight_kg != null ? String(o.weight_kg) : '', show_in_configurator: o.show_in_configurator !== false });
   }
 
   async function handleUpdate(oid) {
@@ -880,6 +921,29 @@ function FleetConfigTab() {
         Manage the predefined configuration options that appear as checkboxes on each aircraft's Configuration tab.
       </p>
 
+      {/* Single-select categories */}
+      {knownCategories.length > 0 && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Single-select Categories</div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 12 }}>
+            Tick a category where only <strong>one</strong> option may be chosen per aircraft (e.g. Engine, Propeller, Seat Belts). Unticked categories allow multiple selections.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {knownCategories.map(cat => {
+              const on = singleCats.has(cat);
+              return (
+                <button key={cat} type="button" onClick={() => toggleSingleCat(cat)}
+                  style={{ fontSize: 12, padding: '5px 12px', borderRadius: 16, cursor: 'pointer',
+                    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                    background: on ? 'var(--accent)' : 'transparent',
+                    color: on ? '#fff' : 'var(--text-secondary)', fontWeight: on ? 700 : 400 }}
+                >{on ? '◉ ' : '○ '}{cat}{on ? ' — choose one' : ''}</button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Add new option */}
       <div className="card" style={{ marginBottom: 24 }}>
         <div style={{ fontWeight: 700, marginBottom: 4 }}>Add Configuration Option</div>
@@ -909,6 +973,10 @@ function FleetConfigTab() {
             <div className="form-group" style={{ flex: '0 0 100px', margin: 0 }}>
               <label>Price (€)</label>
               <input type="number" min="0" step="100" value={addForm.price} onChange={e => setAddForm(f => ({ ...f, price: e.target.value }))} placeholder="0" />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 90px', margin: 0 }}>
+              <label>Weight (kg)</label>
+              <input type="number" step="0.1" value={addForm.weight_kg} onChange={e => setAddForm(f => ({ ...f, weight_kg: e.target.value }))} placeholder="0" />
             </div>
             <div className="form-group" style={{ flex: '0 0 70px', margin: 0 }}>
               <label>Order</label>
@@ -944,9 +1012,13 @@ function FleetConfigTab() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => (
+          {orderedCategories().map((cat, catIdx, catArr) => { const opts = grouped[cat]; return (
             <div key={cat} className="card" style={{ padding: 0 }}>
-              <div style={{ padding: '10px 16px', background: 'var(--bg-hover)', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>
+              <div style={{ padding: '8px 12px', background: 'var(--bg-hover)', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ display: 'flex', gap: 2 }}>
+                  <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', opacity: catIdx === 0 ? 0.3 : 1 }} disabled={catIdx === 0} onClick={() => moveCategory(cat, -1)} title="Move category up">▲</button>
+                  <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', opacity: catIdx === catArr.length - 1 ? 0.3 : 1 }} disabled={catIdx === catArr.length - 1} onClick={() => moveCategory(cat, 1)} title="Move category down">▼</button>
+                </span>
                 {cat}
               </div>
               <div className="table-wrap">
@@ -955,6 +1027,7 @@ function FleetConfigTab() {
                     <tr>
                       <th>Label</th>
                       <th style={{ width: 100 }}>Price</th>
+                      <th style={{ width: 90 }}>Weight</th>
                       <th style={{ width: 80 }}>Standard</th>
                       <th style={{ width: 70 }}>Locked</th>
                       <th style={{ width: 110 }}>Configurator</th>
@@ -973,7 +1046,7 @@ function FleetConfigTab() {
                           ) : (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <span style={{ fontSize: 13 }}>{o.label}</span>
-                              {o.is_standard && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 20, background: '#22c55e22', color: '#22c55e', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Standard</span>}
+                              {!!o.is_standard && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 20, background: '#22c55e22', color: '#22c55e', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Standard</span>}
                             </div>
                           )}
                         </td>
@@ -983,6 +1056,15 @@ function FleetConfigTab() {
                           ) : (
                             <span style={{ fontSize: 13, fontWeight: o.price != null ? 600 : 400, color: o.price != null ? 'var(--text-primary)' : 'var(--text-muted)' }}>
                               {o.price != null ? `€${Number(o.price).toLocaleString()}` : '—'}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {editId === o.id ? (
+                            <input type="number" step="0.1" value={editForm.weight_kg} onChange={e => setEditForm(f => ({ ...f, weight_kg: e.target.value }))} style={{ fontSize: 13, width: 70 }} placeholder="0" />
+                          ) : (
+                            <span style={{ fontSize: 13, color: o.weight_kg != null ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                              {o.weight_kg != null ? `${Number(o.weight_kg) >= 0 ? '+' : ''}${Number(o.weight_kg)} kg` : '—'}
                             </span>
                           )}
                         </td>
@@ -1039,7 +1121,7 @@ function FleetConfigTab() {
                 </table>
               </div>
             </div>
-          ))}
+          ); })}
         </div>
       )}
 
@@ -1195,7 +1277,13 @@ function EventTypesSection() {
   );
 }
 
-const EMPTY_MODEL_FORM = { name: '', code: '', active: true, show_in_configurator: false, base_price: '', description: '' };
+const EMPTY_MODEL_FORM = { name: '', code: '', active: true, show_in_configurator: false, base_price: '', description: '', mtom_kg: '', empty_weight_kg: '', specs: [] };
+
+function parseSpecs(s) {
+  if (Array.isArray(s)) return s;
+  if (!s) return [];
+  try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; }
+}
 
 function ModelsTab() {
   const toast = useToast();
@@ -1248,6 +1336,9 @@ function ModelsTab() {
       show_in_configurator: !!model.show_in_configurator,
       base_price: model.base_price != null ? String(model.base_price) : '',
       description: model.description || '',
+      mtom_kg: model.mtom_kg != null ? String(model.mtom_kg) : '',
+      empty_weight_kg: model.empty_weight_kg != null ? String(model.empty_weight_kg) : '',
+      specs: parseSpecs(model.specs),
     });
   }
 
@@ -1297,6 +1388,43 @@ function ModelsTab() {
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
             placeholder="Explain what this model is and what the buyer gets — e.g. 'The BW635RG is our retractable-gear flagship: 140 hp Rotax 915iS, 1,400 km range, full glass cockpit…'"
           />
+        </div>
+
+        {/* Weight envelope for the configurator payload calculation */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Standard Empty Weight (kg)</label>
+            <input type="number" step="0.1" value={form.empty_weight_kg} onChange={e => setForm(f => ({ ...f, empty_weight_kg: e.target.value }))} placeholder="e.g. 371" />
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>MTOM — Max Takeoff Mass (kg)</label>
+            <input type="number" step="0.1" value={form.mtom_kg} onChange={e => setForm(f => ({ ...f, mtom_kg: e.target.value }))} placeholder="e.g. 600" />
+          </div>
+        </div>
+
+        {/* Spec sheet editor — label/value rows shown to the buyer */}
+        <div className="form-group" style={{ margin: 0 }}>
+          <label>Specifications <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>— the stats table shown to the buyer</span></label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(form.specs || []).map((sp, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8 }}>
+                <input
+                  style={{ flex: '0 0 40%' }} placeholder="Label (e.g. Cruise Speed)"
+                  value={sp.label || ''}
+                  onChange={e => setForm(f => { const s = [...f.specs]; s[i] = { ...s[i], label: e.target.value }; return { ...f, specs: s }; })}
+                />
+                <input
+                  style={{ flex: 1 }} placeholder="Value (e.g. 190 kts)"
+                  value={sp.value || ''}
+                  onChange={e => setForm(f => { const s = [...f.specs]; s[i] = { ...s[i], value: e.target.value }; return { ...f, specs: s }; })}
+                />
+                <button type="button" className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }}
+                  onClick={() => setForm(f => ({ ...f, specs: f.specs.filter((_, j) => j !== i) }))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }}
+              onClick={() => setForm(f => ({ ...f, specs: [...(f.specs || []), { label: '', value: '' }] }))}>+ Add spec row</button>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 20 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>

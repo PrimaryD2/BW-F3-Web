@@ -582,12 +582,12 @@ router.get('/config-options', async (_req, res) => {
 
 // POST /api/fleet/config-options
 router.post('/config-options', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { category, label, sort_order = 0, is_standard = false, is_locked = false, price, show_in_configurator = true } = req.body;
+  const { category, label, sort_order = 0, is_standard = false, is_locked = false, price, weight_kg, show_in_configurator = true } = req.body;
   if (!category || !label) return res.status(400).json({ error: 'category and label are required' });
   try {
     const r = await query(
-      'INSERT INTO fleet_config_options (category, label, sort_order, is_standard, is_locked, price, show_in_configurator) VALUES (?,?,?,?,?,?,?)',
-      [category.trim(), label.trim(), sort_order, is_standard ? 1 : 0, is_locked ? 1 : 0, price != null && price !== '' ? Number(price) : null, show_in_configurator ? 1 : 0]
+      'INSERT INTO fleet_config_options (category, label, sort_order, is_standard, is_locked, price, weight_kg, show_in_configurator) VALUES (?,?,?,?,?,?,?,?)',
+      [category.trim(), label.trim(), sort_order, is_standard ? 1 : 0, is_locked ? 1 : 0, price != null && price !== '' ? Number(price) : null, weight_kg != null && weight_kg !== '' ? Number(weight_kg) : null, show_in_configurator ? 1 : 0]
     );
     const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [r.insertId]);
     res.status(201).json(rows[0]);
@@ -599,11 +599,11 @@ router.post('/config-options', requireRole('admin', 'supervisor'), async (req, r
 
 // PUT /api/fleet/config-options/:oid
 router.put('/config-options/:oid', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { category, label, sort_order, is_standard, is_locked, price, show_in_configurator } = req.body;
+  const { category, label, sort_order, is_standard, is_locked, price, weight_kg, show_in_configurator } = req.body;
   try {
     await query(
-      'UPDATE fleet_config_options SET category=?, label=?, sort_order=?, is_standard=?, is_locked=?, price=?, show_in_configurator=? WHERE id=?',
-      [category?.trim(), label?.trim(), sort_order ?? 0, is_standard ? 1 : 0, is_locked ? 1 : 0, price != null && price !== '' ? Number(price) : null, show_in_configurator ? 1 : 0, req.params.oid]
+      'UPDATE fleet_config_options SET category=?, label=?, sort_order=?, is_standard=?, is_locked=?, price=?, weight_kg=?, show_in_configurator=? WHERE id=?',
+      [category?.trim(), label?.trim(), sort_order ?? 0, is_standard ? 1 : 0, is_locked ? 1 : 0, price != null && price !== '' ? Number(price) : null, weight_kg != null && weight_kg !== '' ? Number(weight_kg) : null, show_in_configurator ? 1 : 0, req.params.oid]
     );
     const rows = await query('SELECT * FROM fleet_config_options WHERE id = ?', [req.params.oid]);
     res.json(rows[0]);

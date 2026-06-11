@@ -389,6 +389,8 @@ export default function PlannedMaintenance() {
   // Admin: edit completed records
   const [editingCompletedId, setEditingCompletedId] = useState(null);
   const [completedEditForm, setCompletedEditForm] = useState(emptyCompletedEditForm());
+  // Completed section is collapsed by default so the page loads fast
+  const [showCompleted, setShowCompleted] = useState(false);
 
   useEffect(() => { load(); }, []);
 
@@ -1214,10 +1216,21 @@ ${pm.signoff_notes ? `
 
           {/* ── Completed Maintenance ─────────────────────────────────────── */}
           <div className="card">
-            <div className="card-header">
+            <div
+              className="card-header"
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+              onClick={() => setShowCompleted(s => !s)}
+            >
+              <span style={{ fontSize: 13, color: 'var(--text-muted)', width: 16, display: 'inline-block' }}>{showCompleted ? '▼' : '▶'}</span>
               <span className="card-title">Completed Maintenance</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>
+                ({completedItems.length})
+              </span>
+              {!showCompleted && completedItems.length > 0 && (
+                <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--accent)' }}>Show</span>
+              )}
             </div>
-            {completedItems.length === 0 ? (
+            {!showCompleted ? null : completedItems.length === 0 ? (
               <p style={{ color: 'var(--text-muted)', margin: 0 }}>No maintenance has been signed off yet.</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

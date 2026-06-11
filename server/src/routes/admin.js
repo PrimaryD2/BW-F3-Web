@@ -349,12 +349,14 @@ router.get('/models', async (_req, res) => {
 
 // POST /api/admin/models
 router.post('/models', async (req, res) => {
-  const { name, code, active = true, sort_order = 0, show_in_configurator = false, base_price, description } = req.body || {};
+  const { name, code, active = true, sort_order = 0, show_in_configurator = false, base_price, description, mtom_kg, empty_weight_kg, specs } = req.body || {};
   if (!String(name || '').trim()) return res.status(400).json({ error: 'Model name required' });
+  const specsJson = Array.isArray(specs) ? JSON.stringify(specs.filter(s => s && (s.label || s.value))) : (specs || null);
   try {
     const result = await query(
-      'INSERT INTO fleet_models (name, code, active, sort_order, show_in_configurator, base_price, description) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null]
+      'INSERT INTO fleet_models (name, code, active, sort_order, show_in_configurator, base_price, description, mtom_kg, empty_weight_kg, specs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [String(name).trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null,
+       mtom_kg != null && mtom_kg !== '' ? Number(mtom_kg) : null, empty_weight_kg != null && empty_weight_kg !== '' ? Number(empty_weight_kg) : null, specsJson]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [result.insertId]);
     res.status(201).json(rows[0]);
@@ -367,11 +369,13 @@ router.post('/models', async (req, res) => {
 
 // PUT /api/admin/models/:id
 router.put('/models/:id', async (req, res) => {
-  const { name, code, active, sort_order, show_in_configurator, base_price, description } = req.body || {};
+  const { name, code, active, sort_order, show_in_configurator, base_price, description, mtom_kg, empty_weight_kg, specs } = req.body || {};
+  const specsJson = Array.isArray(specs) ? JSON.stringify(specs.filter(s => s && (s.label || s.value))) : (specs || null);
   try {
     await query(
-      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ?, show_in_configurator = ?, base_price = ?, description = ? WHERE id = ?',
-      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null, req.params.id]
+      'UPDATE fleet_models SET name = ?, code = ?, active = ?, sort_order = ?, show_in_configurator = ?, base_price = ?, description = ?, mtom_kg = ?, empty_weight_kg = ?, specs = ? WHERE id = ?',
+      [String(name || '').trim(), code || null, active ? 1 : 0, Number(sort_order) || 0, show_in_configurator ? 1 : 0, base_price != null && base_price !== '' ? Number(base_price) : null, description || null,
+       mtom_kg != null && mtom_kg !== '' ? Number(mtom_kg) : null, empty_weight_kg != null && empty_weight_kg !== '' ? Number(empty_weight_kg) : null, specsJson, req.params.id]
     );
     const rows = await query('SELECT * FROM fleet_models WHERE id = ?', [req.params.id]);
     res.json(rows[0]);

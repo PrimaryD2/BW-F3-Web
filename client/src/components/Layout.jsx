@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -170,7 +170,9 @@ export default function Layout() {
         </div>
 
         <main style={{ flex: 1 }}>
-          <Outlet />
+          <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-secondary)' }}>Loading…</div>}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 

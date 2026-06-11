@@ -20,6 +20,18 @@ function toDateOnly(v) {
   return s.slice(0, 10);
 }
 
+// Recompute a customer's next_followup_date from its open follow-up logs.
+// Keeps the customer-level reminder accurate after logs are added/resolved/deleted.
+async function recomputeNextFollowup(conn, customerId) {
+  const rows = await conn.query(
+    `SELECT MIN(follow_up_date) AS next FROM customer_logs
+     WHERE customer_id = ? AND follow_up_needed = TRUE AND follow_up_date IS NOT NULL
+       AND entry_status NOT IN ('solved','closed')`,
+    [customerId]
+  );
+  await conn.query('UPDATE customers SET next_followup_date = ? WHERE id = ?', [rows[0]?.next || null, customerId]);
+}
+
 const STATUS_LABELS = {
   new: 'New',
   contacted: 'Contacted',
@@ -307,14 +319,8 @@ router.post('/:id/logs', async (req, res) => {
       [date_time || new Date().toISOString().slice(0, 19).replace('T', ' '), req.params.id]
     );
 
-    // If follow-up set, update next_followup_date if earlier
-    if (follow_up_needed && follow_up_date) {
-      const safeDate = toDateOnly(follow_up_date);
-      await conn.query(`
-        UPDATE customers SET next_followup_date = ?
-        WHERE id = ? AND (next_followup_date IS NULL OR next_followup_date > ?)
-      `, [safeDate, req.params.id, safeDate]);
-    }
+    // Keep the customer-level next follow-up date in sync with open follow-ups
+    await recomputeNextFollowup(conn, req.params.id);
 
     res.status(201).json({ id: Number(result.insertId) });
   } catch (err) {
@@ -352,6 +358,8 @@ router.put('/:customerId/logs/:logId', async (req, res) => {
       req.params.logId, req.params.customerId,
     ]);
 
+    await recomputeNextFollowup(conn, req.params.customerId);
+
     res.json({ ok: true });
   } catch (err) {
     console.error('PUT /customers/:customerId/logs/:logId error:', err);
@@ -370,6 +378,7 @@ router.delete('/:customerId/logs/:logId', async (req, res) => {
       'DELETE FROM customer_logs WHERE id = ? AND customer_id = ?',
       [req.params.logId, req.params.customerId]
     );
+    await recomputeNextFollowup(conn, req.params.customerId);
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE /customers/:customerId/logs/:logId error:', err);
@@ -592,15 +601,23 @@ router.post('/:id/quotes/:qid/send-email', async (req, res) => {
     const quote = quotes[0];
 
     const options = await conn.query(
-      'SELECT * FROM customer_quote_options WHERE quote_id = ? ORDER BY option_category, option_label',
+      `SELECT cqo.*, fco.weight_kg
+       FROM customer_quote_options cqo
+       LEFT JOIN fleet_config_options fco ON fco.id = cqo.option_id
+       WHERE cqo.quote_id = ? ORDER BY cqo.option_category, cqo.option_label`,
       [req.params.qid]
     );
 
-    // Load model base price
-    let basePrice = null;
+    // Load model base price, weight envelope and spec sheet
+    let basePrice = null, modelMtom = null, modelEmpty = null, modelSpecs = [];
     if (quote.model_id) {
-      const mRows = await conn.query('SELECT base_price FROM fleet_models WHERE id = ?', [quote.model_id]);
-      basePrice = mRows[0]?.base_price != null ? Number(mRows[0].base_price) : null;
+      const mRows = await conn.query('SELECT base_price, mtom_kg, empty_weight_kg, specs FROM fleet_models WHERE id = ?', [quote.model_id]);
+      const m = mRows[0] || {};
+      basePrice = m.base_price != null ? Number(m.base_price) : null;
+      modelMtom = m.mtom_kg != null ? Number(m.mtom_kg) : null;
+      modelEmpty = m.empty_weight_kg != null ? Number(m.empty_weight_kg) : null;
+      try { modelSpecs = m.specs ? JSON.parse(m.specs) : []; } catch { modelSpecs = []; }
+      if (!Array.isArray(modelSpecs)) modelSpecs = [];
     }
 
     // Load customer
@@ -622,6 +639,27 @@ router.post('/:id/quotes/:qid/send-email', async (req, res) => {
     const totalWithVat = subtotal + vatAmount;
 
     const fmt = (n) => n != null ? `€${Number(n).toLocaleString('en-EU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—';
+
+    // Weight & payload
+    const additionalWeight = options.reduce((s, o) => s + (o.weight_kg != null ? Number(o.weight_kg) : 0), 0);
+    const estEmptyWeight = modelEmpty != null ? modelEmpty + additionalWeight : null;
+    const remainingPayload = (modelMtom != null && estEmptyWeight != null) ? modelMtom - estEmptyWeight : null;
+    const kg = (n) => `${Number(n).toLocaleString('en-EU', { maximumFractionDigits: 1 })} kg`;
+
+    const weightBlock = estEmptyWeight != null ? `
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;font-size:13px;color:#333;">
+        <tr><td style="padding:3px 0;color:#666;">Standard empty weight</td><td align="right">${kg(modelEmpty)}</td></tr>
+        <tr><td style="padding:3px 0;color:#666;">Additional options</td><td align="right">+ ${kg(additionalWeight)}</td></tr>
+        <tr><td style="padding:5px 0;font-weight:800;border-top:1px solid #e8e8e8;">Estimated empty weight</td><td align="right" style="font-weight:800;border-top:1px solid #e8e8e8;">${kg(estEmptyWeight)}</td></tr>
+        ${modelMtom != null ? `<tr><td style="padding:3px 0;color:#666;">MTOM</td><td align="right">${kg(modelMtom)}</td></tr>
+        <tr><td style="padding:3px 0;font-weight:700;color:#2563eb;">Remaining payload</td><td align="right" style="font-weight:700;color:#2563eb;">${remainingPayload != null ? kg(remainingPayload) : '—'}</td></tr>` : ''}
+      </table>` : '';
+
+    const specsBlock = modelSpecs.length ? `
+      <h3 style="font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#888;margin:26px 0 8px;">Specifications</h3>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#333;">
+        ${modelSpecs.map((sp, i) => `<tr style="background:${i % 2 ? '#fafafa' : '#fff'};"><td style="padding:6px 8px;color:#666;">${sp.label || ''}</td><td align="right" style="padding:6px 8px;font-weight:600;">${sp.value || ''}</td></tr>`).join('')}
+      </table>` : '';
 
     // Group options by category
     const byCategory = options.reduce((acc, o) => {
@@ -743,6 +781,12 @@ router.post('/:id/quotes/:qid/send-email', async (req, res) => {
             <td style="padding:18px 20px;font-size:20px;font-weight:900;color:#ffffff;text-align:right;">${fmt(totalWithVat)}</td>
           </tr>` : ''}
         </table>
+
+        ${weightBlock ? `
+        <h3 style="font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#888;margin:26px 0 4px;">Weight &amp; Payload</h3>
+        ${weightBlock}` : ''}
+
+        ${specsBlock}
 
         ${quote.notes ? `
         <div style="margin-top:24px;padding:16px 20px;background:#fffbeb;border-radius:8px;border-left:4px solid #f59e0b;">
