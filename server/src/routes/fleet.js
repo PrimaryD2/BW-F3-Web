@@ -131,7 +131,7 @@ const AIRCRAFT_SELECT = `
   total_hours_tsn, engine_hours, prop_hours,
   next_inspection_date, next_inspection_hours,
   toe_in_left, toe_in_right,
-  customer_name, first_flight_date, delivery_date, financing_flag, serviced_by_us, notes,
+  customer_name, customer_id, production_stage, first_flight_date, delivery_date, financing_flag, serviced_by_us, notes,
   created_at, updated_at
 `;
 
@@ -156,6 +156,14 @@ router.get('/settings', async (_req, res) => {
     const out = {};
     for (const r of rows) out[r.setting_key] = r.setting_value;
     res.json(out);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// GET /api/fleet/component-types — readable by any authenticated user (admin manages them)
+router.get('/component-types', async (_req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_component_types ORDER BY sort_order, name');
+    res.json(rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
@@ -845,7 +853,7 @@ router.put('/:id', requireRole('admin', 'supervisor'), async (req, res) => {
     'total_hours_tsn', 'engine_hours', 'prop_hours',
     'next_inspection_date', 'next_inspection_hours',
     'toe_in_left', 'toe_in_right',
-    'customer_name', 'first_flight_date', 'delivery_date',
+    'customer_name', 'customer_id', 'production_stage', 'first_flight_date', 'delivery_date',
     'financing_flag', 'serviced_by_us', 'notes',
   ];
   const setClauses = [];
@@ -1832,6 +1840,41 @@ router.delete('/:id/images/:iid', requireRole('admin', 'supervisor'), async (req
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// ─── Customer progress photos (separate from the staff gallery; shown on portal) ──
+router.get('/:id/progress-photos', async (req, res) => {
+  try {
+    const rows = await query('SELECT * FROM fleet_progress_photos WHERE aircraft_id = ? ORDER BY created_at DESC, id DESC', [req.params.id]);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.post('/:id/progress-photos', requireRole('admin', 'supervisor'), upload.single('photo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No image file provided' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_progress_photos (aircraft_id, filename, caption, uploaded_by) VALUES (?,?,?,?)',
+      [req.params.id, req.file.filename, req.body.caption || null, req.user.id]
+    );
+    const rows = await query('SELECT * FROM fleet_progress_photos WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)); } catch {}
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:id/progress-photos/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    const rows = await query('SELECT filename FROM fleet_progress_photos WHERE id=? AND aircraft_id=?', [req.params.pid, req.params.id]);
+    if (rows && rows.length > 0) {
+      await query('DELETE FROM fleet_progress_photos WHERE id=? AND aircraft_id=?', [req.params.pid, req.params.id]);
+      try { fs.unlinkSync(path.join(UPLOAD_DIR, rows[0].filename)); } catch {}
+    }
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── Paperwork ────────────────────────────────────────────────────────────────

@@ -1,10 +1,12 @@
 const express = require('express');
-const { pool } = require('../config/db');
-const { authenticateToken } = require('../middleware/auth');
+const bcrypt = require('bcryptjs');
+const { pool, query } = require('../config/db');
+const { authenticateToken, requireRole } = require('../middleware/auth');
 // nodemailer removed — using Brevo HTTP API instead (avoids Docker DNS issues)
 
 const router = express.Router();
-router.use(authenticateToken);
+// CRM is staff-only — viewers (and customers) cannot access customer records
+router.use(authenticateToken, requireRole('admin', 'supervisor', 'worker'));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -159,16 +161,19 @@ router.post('/', async (req, res) => {
       full_name, company_name, country, city, email, phone,
       preferred_language, source, interested_aircraft, customer_type,
       status, priority, assigned_employee_id, general_notes,
+      portal_enabled, portal_password,
     } = req.body;
 
     if (!full_name) return res.status(400).json({ error: 'full_name is required' });
+    const portalHash = portal_password ? await bcrypt.hash(portal_password, 12) : null;
 
     const result = await conn.query(`
       INSERT INTO customers
         (full_name, company_name, country, city, email, phone,
          preferred_language, source, interested_aircraft, customer_type,
-         status, priority, assigned_employee_id, general_notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, priority, assigned_employee_id, general_notes,
+         portal_enabled, portal_password_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       full_name, company_name || null, country || null, city || null,
       email || null, phone || null, preferred_language || null,
@@ -176,6 +181,7 @@ router.post('/', async (req, res) => {
       customer_type || 'new_buyer', status || 'new',
       priority || 'medium', assigned_employee_id || null,
       general_notes || null,
+      portal_enabled ? 1 : 0, portalHash,
     ]);
 
     res.status(201).json({ id: Number(result.insertId) });
@@ -202,6 +208,8 @@ router.put('/:id', async (req, res) => {
     // NOTE: last_contact_date is intentionally NOT updated here — it is
     // auto-set by the log endpoint so manual edits cannot accidentally
     // overwrite it with a stale or malformed datetime string.
+    // Portal access (portal_enabled / password) is managed via PUT /:id/portal,
+    // so editing the customer record never changes their login.
     await conn.query(`
       UPDATE customers SET
         full_name = ?, company_name = ?, country = ?, city = ?,
@@ -229,6 +237,46 @@ router.put('/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     if (conn) conn.release();
+  }
+});
+
+// ─── Maintenance booking requests (staff view) ───────────────────────────────
+router.get('/maintenance-requests/all', async (_req, res) => {
+  try {
+    const rows = await query(
+      `SELECT mr.*, c.full_name AS customer_name, fa.bw_serial
+       FROM portal_maintenance_requests mr
+       JOIN customers c ON c.id = mr.customer_id
+       LEFT JOIN fleet_aircraft fa ON fa.id = mr.aircraft_id
+       ORDER BY CASE WHEN mr.status = 'new' THEN 0 ELSE 1 END, mr.created_at DESC`
+    );
+    res.json(rows);
+  } catch (err) { console.error('GET /customers/maintenance-requests/all error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.put('/maintenance-requests/:rid', async (req, res) => {
+  const { status } = req.body || {};
+  try {
+    await query('UPDATE portal_maintenance_requests SET status = ? WHERE id = ?', [status || 'new', req.params.rid]);
+    res.json({ ok: true });
+  } catch (err) { console.error('PUT /customers/maintenance-requests/:rid error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── PUT /api/customers/:id/portal — manage portal login (enable + password) ──
+router.put('/:id/portal', async (req, res) => {
+  const { portal_enabled, portal_password } = req.body || {};
+  try {
+    await query('UPDATE customers SET portal_enabled = ? WHERE id = ?', [portal_enabled ? 1 : 0, req.params.id]);
+    if (portal_password) {
+      const hash = await bcrypt.hash(portal_password, 12);
+      // Force the customer to choose their own password on first login
+      await query('UPDATE customers SET portal_password_hash = ?, portal_must_change_password = TRUE WHERE id = ?', [hash, req.params.id]);
+    }
+    const rows = await query('SELECT portal_enabled, (portal_password_hash IS NOT NULL) AS has_password FROM customers WHERE id = ?', [req.params.id]);
+    res.json(rows[0] || { ok: true });
+  } catch (err) {
+    console.error('PUT /customers/:id/portal error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

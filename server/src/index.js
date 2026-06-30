@@ -16,6 +16,7 @@ const statisticsRoutes = require('./routes/statistics');
 const pdfRoutes       = require('./routes/pdf');
 const fleetRoutes     = require('./routes/fleet');
 const customerRoutes  = require('./routes/customers');
+const portalRoutes    = require('./routes/portal');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -55,6 +56,7 @@ app.use('/api/statistics',  statisticsRoutes);
 app.use('/api/pdf',         pdfRoutes);
 app.use('/api/fleet',       fleetRoutes);
 app.use('/api/customers',   customerRoutes);
+app.use('/api/portal',      portalRoutes);
 
 // On-demand thumbnails — generated once, cached on disk. Falls back to the
 // original image if sharp is unavailable or generation fails (never breaks images).

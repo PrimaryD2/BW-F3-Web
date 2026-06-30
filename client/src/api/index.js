@@ -79,6 +79,7 @@ export const createComponentName  = (d)       => api.post('/admin/component-name
 export const updateComponentName  = (id, d)   => api.put(`/admin/component-names/${id}`, d);
 export const deleteComponentName  = (id)      => api.delete(`/admin/component-names/${id}`);
 export const getFleetComponentNames = ()      => api.get('/fleet/component-names');
+export const getFleetComponentTypes = ()      => api.get('/fleet/component-types');
 export const getFleetSettings     = ()        => api.get('/fleet/settings');
 export const getAdminSettings     = ()        => api.get('/admin/settings');
 export const updateAdminSettings  = (d)       => api.put('/admin/settings', d);
@@ -187,6 +188,24 @@ export const getCustomer          = (id)       => api.get(`/customers/${id}`);
 export const createCustomer       = (d)        => api.post('/customers', d);
 export const updateCustomer       = (id, d)    => api.put(`/customers/${id}`, d);
 export const archiveCustomer      = (id)       => api.delete(`/customers/${id}`);
+export const updateCustomerPortal = (id, d)    => api.put(`/customers/${id}/portal`, d);
+export const getMaintenanceRequests = ()       => api.get('/customers/maintenance-requests/all');
+export const updateMaintenanceRequest = (rid, d) => api.put(`/customers/maintenance-requests/${rid}`, d);
+
+// ─── Progress photos (customer-facing, per aircraft) ───────────────────────────
+export const getProgressPhotos   = (id)        => api.get(`/fleet/${id}/progress-photos`);
+export const uploadProgressPhoto = (id, formData) =>
+  api.post(`/fleet/${id}/progress-photos`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const deleteProgressPhoto = (id, pid)   => api.delete(`/fleet/${id}/progress-photos/${pid}`);
+
+// ─── Portal admin (news + FAQ) ─────────────────────────────────────────────────
+export const getPortalNews    = ()        => api.get('/admin/portal-news');
+export const createPortalNews = (d)       => api.post('/admin/portal-news', d);
+export const deletePortalNews = (id)      => api.delete(`/admin/portal-news/${id}`);
+export const getPortalFaq     = ()        => api.get('/admin/faq');
+export const createPortalFaq  = (d)       => api.post('/admin/faq', d);
+export const updatePortalFaq  = (id, d)   => api.put(`/admin/faq/${id}`, d);
+export const deletePortalFaq  = (id)      => api.delete(`/admin/faq/${id}`);
 
 export const getCustomerLogs      = (id, p)    => api.get(`/customers/${id}/logs`, { params: p });
 export const createCustomerLog    = (id, d)    => api.post(`/customers/${id}/logs`, d);

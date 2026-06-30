@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   getCustomer, createCustomer, updateCustomer, archiveCustomer,
@@ -7,8 +7,12 @@ import {
   getCustomerBookings, createCustomerBooking,
   getCustomerQuotes, createCustomerQuote, updateCustomerQuote, deleteCustomerQuote, sendCustomerQuoteEmail,
   getFleetList, getFleetServiceTemplates, getFleetConfigOptions,
+  updateCustomerPortal, updateFleetAircraft,
+  getProgressPhotos, uploadProgressPhoto, deleteProgressPhoto,
+  getMaintenanceRequests, updateMaintenanceRequest,
 } from '../api/index';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 // ─── Label / colour maps ─────────────────────────────────────────────────────
 const STATUS_LABELS = {
@@ -1493,18 +1497,186 @@ function BookServiceModal({ customerId, onSave, onCancel }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Customer Portal management card
+// ═══════════════════════════════════════════════════════════════════════════════
+const PROD_STAGES = ['F1', 'F2W', 'F2F', 'F3', 'F4', 'F5'];
+
+// One linked aircraft: production stage, unlink, and customer-facing progress photos
+function AircraftPortalRow({ a, onChanged }) {
+  const toast = useToast();
+  const [photos, setPhotos] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
+  useEffect(() => { getProgressPhotos(a.id).then(r => setPhotos(r.data || [])).catch(() => {}); }, [a.id]);
+
+  async function setStage(stage) { try { await updateFleetAircraft(a.id, { production_stage: stage || null }); onChanged(); } catch { toast.error('Failed'); } }
+  async function unlink() { try { await updateFleetAircraft(a.id, { customer_id: null }); onChanged(); } catch { toast.error('Failed'); } }
+  async function onFile(e) {
+    const file = e.target.files[0]; if (!file) return;
+    setUploading(true);
+    try { const fd = new FormData(); fd.append('photo', file); const r = await uploadProgressPhoto(a.id, fd); setPhotos(p => [r.data, ...p]); }
+    catch { toast.error('Upload failed'); }
+    setUploading(false); e.target.value = '';
+  }
+  async function delPhoto(pid) { try { await deleteProgressPhoto(a.id, pid); setPhotos(p => p.filter(x => x.id !== pid)); } catch { toast.error('Failed'); } }
+
+  return (
+    <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700, fontSize: 13 }}>BW-{a.bw_serial}{a.registration ? ` · ${a.registration}` : ''}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{a.model}</span>
+        <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          Stage:
+          <select value={a.production_stage || ''} onChange={e => setStage(e.target.value)}>
+            <option value="">— Not set —</option>
+            {PROD_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFile} />
+        <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} disabled={uploading} onClick={() => fileRef.current?.click()}>
+          {uploading ? '⏳' : '📷'} Add progress photo
+        </button>
+        <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)', fontSize: 11 }} onClick={unlink}>Unlink</button>
+      </div>
+      {photos.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+          {photos.map(p => (
+            <div key={p.id} style={{ position: 'relative' }}>
+              <img src={`/uploads/thumb/fleet/${p.filename}`} alt={p.caption || ''} style={{ width: 86, height: 64, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }} />
+              <button onClick={() => delPhoto(p.id)} title="Delete"
+                style={{ position: 'absolute', top: 2, right: 2, background: '#ef444488', border: 'none', borderRadius: '50%', width: 18, height: 18, color: '#fff', fontSize: 11, cursor: 'pointer', lineHeight: 1, padding: 0 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const REQ_STATUSES = ['new', 'reviewed', 'scheduled', 'declined'];
+function MaintenanceRequestsCard({ customerId }) {
+  const toast = useToast();
+  const [reqs, setReqs] = useState([]);
+  useEffect(() => {
+    getMaintenanceRequests().then(r => setReqs((r.data || []).filter(x => String(x.customer_id) === String(customerId)))).catch(() => {});
+  }, [customerId]);
+  async function setStatus(rid, status) {
+    try { await updateMaintenanceRequest(rid, { status }); setReqs(rs => rs.map(x => x.id === rid ? { ...x, status } : x)); }
+    catch { toast.error('Failed'); }
+  }
+  if (reqs.length === 0) return null;
+  return (
+    <div className="card" style={{ marginBottom: 20, borderLeft: '4px solid #f59e0b' }}>
+      <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>🛠 Maintenance Requests from Portal</div>
+      {reqs.map(r => (
+        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{r.bw_serial ? `BW-${r.bw_serial}` : 'Aircraft not specified'}{r.requested_date ? ` · requested ${new Date(r.requested_date).toLocaleDateString('en-GB')}` : ''}</div>
+            {r.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{r.notes}</div>}
+          </div>
+          <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} style={{ textTransform: 'capitalize' }}>
+            {REQ_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PortalManagementCard({ customer, fleetAircraft, onChanged }) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState(!!customer.portal_enabled);
+  const [password, setPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [linkId, setLinkId] = useState('');
+
+  const linked = fleetAircraft.filter(a => String(a.customer_id) === String(customer.id));
+  const unlinked = fleetAircraft.filter(a => String(a.customer_id || '') !== String(customer.id));
+  const portalUrl = `${window.location.origin}/portal/login`;
+
+  async function savePortal() {
+    setSaving(true);
+    try {
+      await updateCustomerPortal(customer.id, { portal_enabled: enabled, portal_password: password || undefined });
+      setPassword('');
+      toast.success('Portal settings saved');
+      onChanged();
+    } catch { toast.error('Failed to save portal settings'); }
+    finally { setSaving(false); }
+  }
+  async function linkAircraft() {
+    if (!linkId) return;
+    try { await updateFleetAircraft(linkId, { customer_id: customer.id }); setLinkId(''); toast.success('Aircraft linked'); onChanged(); }
+    catch { toast.error('Failed to link aircraft'); }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 20, borderLeft: '4px solid #3b82f6' }}>
+      <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>🔑 Customer Portal</div>
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14 }}>
+        Give this customer a login to see their configuration proposals and aircraft production progress at{' '}
+        <a href={portalUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{portalUrl}</a>.
+      </p>
+
+      {/* Enable + password */}
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} style={{ width: 16, height: 16 }} />
+          Enable portal login
+        </label>
+        <div className="form-group" style={{ margin: 0, flex: '1 1 220px' }}>
+          <FieldLabel>Login email</FieldLabel>
+          <input value={customer.email || ''} disabled style={{ opacity: 0.7 }} placeholder="Set an email on the customer first" />
+        </div>
+        <div className="form-group" style={{ margin: 0, flex: '1 1 200px' }}>
+          <FieldLabel>{customer.portal_password_hash ? 'Reset password' : 'Set password'}</FieldLabel>
+          <input type="text" value={password} onChange={e => setPassword(e.target.value)} placeholder={customer.portal_password_hash ? 'Leave blank to keep' : 'Choose a password'} autoComplete="new-password" />
+        </div>
+        <button className="btn btn-primary" onClick={savePortal} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+      {enabled && !customer.email && (
+        <div style={{ fontSize: 12, color: 'var(--warning, #f59e0b)', marginBottom: 12 }}>⚠ This customer needs an email address to log in — add one via Edit Customer.</div>
+      )}
+
+      {/* Linked aircraft */}
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Aircraft shown on their portal</div>
+        {linked.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>No aircraft linked yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            {linked.map(a => <AircraftPortalRow key={a.id} a={a} onChanged={onChanged} />)}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select value={linkId} onChange={e => setLinkId(e.target.value)} style={{ flex: '1 1 240px' }}>
+            <option value="">— Choose an aircraft to link —</option>
+            {unlinked.map(a => (
+              <option key={a.id} value={a.id}>BW-{a.bw_serial}{a.registration ? ` · ${a.registration}` : ''} ({a.model})</option>
+            ))}
+          </select>
+          <button className="btn btn-ghost btn-sm" onClick={linkAircraft} disabled={!linkId}>+ Link aircraft</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Main page
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSupervisor } = useAuth();
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState(null);
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]);
   const [models, setModels] = useState([]);
+  const [fleetAircraft, setFleetAircraft] = useState([]);
   const [loading, setLoading] = useState(!isNew);
   const [logOrder, setLogOrder] = useState('desc');
 
@@ -1545,10 +1717,12 @@ export default function CustomerDetail() {
       getActiveUsers(),
       getFleetModels(),
       getFleetConfigOptions(),
-    ]).then(([, uRes, mRes, coRes]) => {
+      getFleetList(),
+    ]).then(([, uRes, mRes, coRes, flRes]) => {
       if (uRes.status === 'fulfilled')  setUsers(uRes.value?.data || []);
       if (mRes.status === 'fulfilled')  setModels(mRes.value?.data || []);
       if (coRes.status === 'fulfilled') setConfigOptions(coRes.value?.data || []);
+      if (flRes.status === 'fulfilled') setFleetAircraft(flRes.value?.data || []);
     }).finally(() => setLoading(false));
   }, [id]); // re-run when id changes (e.g. after creating a new customer)
 
@@ -1585,6 +1759,10 @@ export default function CustomerDetail() {
     if (!window.confirm('Delete this configuration?')) return;
     await deleteCustomerQuote(id, quoteId);
     await loadCustomer();
+  }
+
+  async function reloadFleet() {
+    try { const r = await getFleetList(); setFleetAircraft(r.data || []); } catch { /* ignore */ }
   }
 
   function openConfigurator(quote = null) {
@@ -1785,6 +1963,16 @@ export default function CustomerDetail() {
           <div style={{ fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{customer.general_notes}</div>
         </div>
       )}
+
+      {/* ── Customer Portal management ── */}
+      {isSupervisor && (
+        <PortalManagementCard
+          customer={customer}
+          fleetAircraft={fleetAircraft}
+          onChanged={() => { loadCustomer(); reloadFleet(); }}
+        />
+      )}
+      {isSupervisor && <MaintenanceRequestsCard customerId={customer.id} />}
 
       {/* ── Buying Process / Aircraft Configurations ── */}
       <div className="card" style={{ marginBottom: 20 }}>

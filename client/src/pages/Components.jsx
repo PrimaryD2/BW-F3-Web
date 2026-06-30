@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { getFleetComponents, getComponentTypes } from '../api';
+import { getFleetComponents, getFleetComponentTypes } from '../api';
 
 const SORT_FIELDS = [
   { value: 'component_name', label: 'Component Name' },
@@ -29,7 +29,7 @@ export default function Components() {
   useEffect(() => {
     Promise.all([
       getFleetComponents(),
-      getComponentTypes(),
+      getFleetComponentTypes(),
     ]).then(([rRes, ctRes]) => {
       setRows(rRes.data || []);
       setComponentTypes(ctRes.data || []);

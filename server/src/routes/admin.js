@@ -5,7 +5,7 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authenticateToken, requireRole('admin'));
-const VALID_ROLES = ['admin', 'supervisor', 'worker'];
+const VALID_ROLES = ['admin', 'supervisor', 'worker', 'viewer'];
 
 function normalizeRole(role) {
   return String(role || '').trim().toLowerCase();
@@ -524,6 +524,78 @@ router.put('/settings', async (req, res) => {
     for (const r of rows) out[r.setting_key] = r.setting_value;
     res.json(out);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── Portal News / Announcements ──────────────────────────────────────────────
+router.get('/portal-news', async (_req, res) => {
+  try {
+    const news = await query('SELECT * FROM portal_news ORDER BY created_at DESC');
+    const ids = news.map(n => n.id);
+    let recByNews = {};
+    if (ids.length) {
+      const recs = await query(
+        `SELECT r.news_id, r.customer_id, c.full_name FROM portal_news_recipients r
+         JOIN customers c ON c.id = r.customer_id WHERE r.news_id IN (${ids.map(() => '?').join(',')})`,
+        ids
+      );
+      for (const r of recs) (recByNews[r.news_id] ||= []).push({ id: r.customer_id, full_name: r.full_name });
+    }
+    res.json(news.map(n => ({ ...n, recipients: recByNews[n.id] || [] })));
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.post('/portal-news', async (req, res) => {
+  const { title, body, audience = 'all', recipient_ids = [] } = req.body || {};
+  if (!String(title || '').trim()) return res.status(400).json({ error: 'Title is required' });
+  try {
+    const r = await query(
+      'INSERT INTO portal_news (title, body, audience, created_by) VALUES (?,?,?,?)',
+      [title.trim(), body || null, audience === 'selected' ? 'selected' : 'all', req.user.id]
+    );
+    if (audience === 'selected') {
+      for (const cid of recipient_ids) {
+        if (cid) await query('INSERT IGNORE INTO portal_news_recipients (news_id, customer_id) VALUES (?,?)', [r.insertId, Number(cid)]);
+      }
+    }
+    res.status(201).json({ id: r.insertId });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.delete('/portal-news/:id', async (req, res) => {
+  try { await query('DELETE FROM portal_news WHERE id = ?', [req.params.id]); res.json({ ok: true }); }
+  catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── Portal FAQ ───────────────────────────────────────────────────────────────
+router.get('/faq', async (_req, res) => {
+  try { res.json(await query('SELECT * FROM portal_faq ORDER BY sort_order, id')); }
+  catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.post('/faq', async (req, res) => {
+  const { question, answer, sort_order = 0, active = true } = req.body || {};
+  if (!String(question || '').trim()) return res.status(400).json({ error: 'Question is required' });
+  try {
+    const r = await query('INSERT INTO portal_faq (question, answer, sort_order, active) VALUES (?,?,?,?)',
+      [question.trim(), answer || null, sort_order, active ? 1 : 0]);
+    const rows = await query('SELECT * FROM portal_faq WHERE id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.put('/faq/:id', async (req, res) => {
+  const { question, answer, sort_order, active } = req.body || {};
+  try {
+    await query('UPDATE portal_faq SET question=?, answer=?, sort_order=?, active=? WHERE id=?',
+      [question, answer || null, sort_order ?? 0, active ? 1 : 0, req.params.id]);
+    const rows = await query('SELECT * FROM portal_faq WHERE id = ?', [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.delete('/faq/:id', async (req, res) => {
+  try { await query('DELETE FROM portal_faq WHERE id = ?', [req.params.id]); res.json({ ok: true }); }
+  catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── Bulletin helpers ─────────────────────────────────────────────────────────

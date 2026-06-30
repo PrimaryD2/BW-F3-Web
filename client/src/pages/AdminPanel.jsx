@@ -12,11 +12,14 @@ import {
   getComponentTypes, createComponentType, updateComponentType, deleteComponentType,
   getComponentNames, createComponentName, updateComponentName, deleteComponentName,
   getAdminSettings, updateAdminSettings,
+  getPortalNews, createPortalNews, deletePortalNews,
+  getPortalFaq, createPortalFaq, updatePortalFaq, deletePortalFaq,
+  getCustomers,
 } from '../api';
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings', 'Portal News', 'FAQ'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -56,6 +59,171 @@ export default function AdminPanel() {
       {tab === 6 && <ComponentTypesSection />}
       {tab === 7 && <ComponentNamesSection />}
       {tab === 8 && <SettingsSection />}
+      {tab === 9 && <PortalNewsSection />}
+      {tab === 10 && <PortalFaqSection />}
+    </div>
+  );
+}
+
+// ─── Portal News Section ──────────────────────────────────────────────────────
+function PortalNewsSection() {
+  const toast = useToast();
+  const [news, setNews] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ title: '', body: '', audience: 'all', recipient_ids: [] });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { load(); }, []);
+  async function load() {
+    setLoading(true);
+    try {
+      const [nRes, cRes] = await Promise.all([getPortalNews(), getCustomers()]);
+      setNews(nRes.data || []);
+      setCustomers((cRes.data || []).filter(c => c.portal_enabled));
+    } finally { setLoading(false); }
+  }
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (!form.title.trim()) { toast.error('Title is required'); return; }
+    setSaving(true);
+    try {
+      await createPortalNews(form);
+      setForm({ title: '', body: '', audience: 'all', recipient_ids: [] });
+      toast.success('Published');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this announcement?')) return;
+    try { await deletePortalNews(id); setNews(n => n.filter(x => x.id !== id)); } catch { toast.error('Delete failed'); }
+  }
+  function toggleRecipient(cid) {
+    setForm(f => {
+      const s = new Set(f.recipient_ids);
+      s.has(cid) ? s.delete(cid) : s.add(cid);
+      return { ...f, recipient_ids: [...s] };
+    });
+  }
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Portal News & Announcements</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>Publish news shown on the customer portal — to all portal customers or selected ones.</p>
+      <div className="card" style={{ marginBottom: 20 }}>
+        <form onSubmit={handleAdd} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Title *</label>
+            <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Winter maintenance slots now open" />
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Message</label>
+            <textarea rows={3} value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))} />
+          </div>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="radio" checked={form.audience === 'all'} onChange={() => setForm(f => ({ ...f, audience: 'all' }))} /> All portal customers
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="radio" checked={form.audience === 'selected'} onChange={() => setForm(f => ({ ...f, audience: 'selected' }))} /> Selected customers
+            </label>
+          </div>
+          {form.audience === 'selected' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
+              {customers.length === 0 ? <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>No portal-enabled customers.</span> : customers.map(c => {
+                const on = form.recipient_ids.includes(c.id);
+                return <button key={c.id} type="button" onClick={() => toggleRecipient(c.id)}
+                  style={{ fontSize: 12, padding: '4px 10px', borderRadius: 16, cursor: 'pointer', border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`, background: on ? 'var(--accent)' : 'transparent', color: on ? '#fff' : 'var(--text-secondary)' }}>
+                  {on ? '✓ ' : ''}{c.full_name}</button>;
+              })}
+            </div>
+          )}
+          <button type="submit" className="btn btn-primary" disabled={saving} style={{ alignSelf: 'flex-start' }}>{saving ? 'Publishing…' : '+ Publish'}</button>
+        </form>
+      </div>
+      {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : news.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>No announcements yet.</div>
+      ) : news.map(n => (
+        <div key={n.id} className="card" style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ fontWeight: 700 }}>{n.title}</div>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(n.id)}>Delete</button>
+          </div>
+          {n.body && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{n.body}</div>}
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+            {n.audience === 'all' ? 'All portal customers' : `Selected: ${(n.recipients || []).map(r => r.full_name).join(', ') || '—'}`}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Portal FAQ Section ───────────────────────────────────────────────────────
+function PortalFaqSection() {
+  const toast = useToast();
+  const [faqs, setFaqs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ question: '', answer: '', sort_order: 0 });
+  const [saving, setSaving] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
+  useEffect(() => { load(); }, []);
+  async function load() { setLoading(true); try { const r = await getPortalFaq(); setFaqs(r.data || []); } finally { setLoading(false); } }
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (!form.question.trim()) { toast.error('Question is required'); return; }
+    setSaving(true);
+    try { const r = await createPortalFaq({ ...form, active: true }); setFaqs(f => [...f, r.data]); setForm({ question: '', answer: '', sort_order: 0 }); toast.success('Added'); }
+    catch (err) { toast.error('Failed'); } finally { setSaving(false); }
+  }
+  async function handleUpdate(id) {
+    try { const r = await updatePortalFaq(id, { ...editForm, active: editForm.active !== false }); setFaqs(f => f.map(x => x.id === id ? r.data : x)); setEditId(null); }
+    catch { toast.error('Failed'); }
+  }
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this FAQ?')) return;
+    try { await deletePortalFaq(id); setFaqs(f => f.filter(x => x.id !== id)); } catch { toast.error('Failed'); }
+  }
+
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Portal FAQ</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>Frequently asked questions shown on the customer portal.</p>
+      <div className="card" style={{ marginBottom: 20 }}>
+        <form onSubmit={handleAdd} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="form-group" style={{ margin: 0 }}><label>Question *</label><input value={form.question} onChange={e => setForm(f => ({ ...f, question: e.target.value }))} /></div>
+          <div className="form-group" style={{ margin: 0 }}><label>Answer</label><textarea rows={2} value={form.answer} onChange={e => setForm(f => ({ ...f, answer: e.target.value }))} /></div>
+          <button type="submit" className="btn btn-primary" disabled={saving} style={{ alignSelf: 'flex-start' }}>{saving ? '…' : '+ Add FAQ'}</button>
+        </form>
+      </div>
+      {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : faqs.map(f => (
+        <div key={f.id} className="card" style={{ marginBottom: 10 }}>
+          {editId === f.id ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input value={editForm.question} onChange={e => setEditForm(s => ({ ...s, question: e.target.value }))} />
+              <textarea rows={2} value={editForm.answer || ''} onChange={e => setEditForm(s => ({ ...s, answer: e.target.value }))} />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-primary btn-sm" onClick={() => handleUpdate(f.id)}>Save</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>{f.question}</div>
+                {f.answer && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{f.answer}</div>}
+              </div>
+              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(f.id); setEditForm({ question: f.question, answer: f.answer, sort_order: f.sort_order, active: f.active }); }}>✎</button>
+                <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(f.id)}>✕</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -215,6 +383,7 @@ function UsersTab() {
                 <div className="form-group">
                   <label>Role</label>
                   <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
+                    <option value="viewer">Viewer (read-only)</option>
                     <option value="worker">Worker</option>
                     <option value="supervisor">Supervisor</option>
                     <option value="admin">Admin</option>
@@ -245,6 +414,7 @@ function UsersTab() {
                 <div className="form-group">
                   <label>Role</label>
                   <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
+                    <option value="viewer">Viewer (read-only)</option>
                     <option value="worker">Worker</option>
                     <option value="supervisor">Supervisor</option>
                     <option value="admin">Admin</option>

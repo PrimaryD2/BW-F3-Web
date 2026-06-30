@@ -620,6 +620,60 @@ const ALTER_STMTS = [
   `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS mtom_kg DECIMAL(8,2) NULL`,
   `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS empty_weight_kg DECIMAL(8,2) NULL`,
   `ALTER TABLE fleet_models ADD COLUMN IF NOT EXISTS specs TEXT NULL`,
+  // ── Customer portal ──
+  `ALTER TABLE customers ADD COLUMN IF NOT EXISTS portal_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE customers ADD COLUMN IF NOT EXISTS portal_password_hash VARCHAR(255) NULL`,
+  `ALTER TABLE customers ADD COLUMN IF NOT EXISTS portal_must_change_password BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Link an aircraft to a CRM customer + track its production stage (F1, F2W, F2F, F3, F4, F5)
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS customer_id INT NULL`,
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS production_stage VARCHAR(10) NULL`,
+  // Customer-facing progress photos (separate from the staff aircraft gallery)
+  `CREATE TABLE IF NOT EXISTS fleet_progress_photos (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     aircraft_id INT NOT NULL,
+     filename VARCHAR(300) NOT NULL,
+     caption VARCHAR(300) NULL,
+     uploaded_by INT NULL,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE
+   )`,
+  // Portal news / announcements (audience: all owners, or selected customers)
+  `CREATE TABLE IF NOT EXISTS portal_news (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     title VARCHAR(200) NOT NULL,
+     body TEXT NULL,
+     audience ENUM('all','selected') NOT NULL DEFAULT 'all',
+     created_by INT NULL,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   )`,
+  `CREATE TABLE IF NOT EXISTS portal_news_recipients (
+     news_id INT NOT NULL,
+     customer_id INT NOT NULL,
+     PRIMARY KEY (news_id, customer_id),
+     FOREIGN KEY (news_id) REFERENCES portal_news(id) ON DELETE CASCADE,
+     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+   )`,
+  // Portal FAQ
+  `CREATE TABLE IF NOT EXISTS portal_faq (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     question VARCHAR(300) NOT NULL,
+     answer TEXT NULL,
+     sort_order INT NOT NULL DEFAULT 0,
+     active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   )`,
+  // Maintenance booking requests from the portal
+  `CREATE TABLE IF NOT EXISTS portal_maintenance_requests (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     customer_id INT NOT NULL,
+     aircraft_id INT NULL,
+     requested_date DATE NULL,
+     notes TEXT NULL,
+     status VARCHAR(20) NOT NULL DEFAULT 'new',
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+     FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE SET NULL
+   )`,
   // Bulletins: target specific aircraft / airplane numbers (comma-separated list of bw_serial or aircraft_number)
   `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS aircraft_numbers VARCHAR(500) NULL`,
   // Planned maintenance: customer-facing work order number

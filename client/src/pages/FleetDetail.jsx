@@ -16,7 +16,7 @@ import {
   uploadFleetPaperwork, updateFleetPaperwork, deleteFleetPaperwork, paperworkDownloadUrl,
   getActiveUsers,
   resolveFleetBulletinAircraft,
-  getComponentTypes,
+  getFleetComponentTypes,
   getFleetComponentNames,
   getFleetSettings,
 } from '../api';
@@ -1367,7 +1367,7 @@ export default function FleetDetail() {
         getFleetEventTypes(),
         getFleetModels(),
         getActiveUsers(),
-        getComponentTypes(),
+        getFleetComponentTypes(),
         getFleetComponentNames(),
         getFleetSettings(),
       ]);
@@ -1409,6 +1409,8 @@ export default function FleetDetail() {
       country_code:          a.country_code           || '',
       country_name:          a.country_name           || '',
       customer_name:         a.customer_name          || '',
+      customer_id:           a.customer_id != null ? String(a.customer_id) : '',
+      production_stage:      a.production_stage        || '',
       first_flight_date:     a.first_flight_date   ? a.first_flight_date.slice(0, 10)   : '',
       delivery_date:         a.delivery_date       ? a.delivery_date.slice(0, 10)       : '',
       empty_weight_kg:       a.empty_weight_kg     != null ? String(a.empty_weight_kg)     : '',

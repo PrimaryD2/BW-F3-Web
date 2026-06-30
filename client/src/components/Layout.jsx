@@ -66,7 +66,7 @@ const ROLE_COLORS = {
 };
 
 export default function Layout() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, isViewer } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -95,7 +95,7 @@ export default function Layout() {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: 'auto' }}>
-        {NAV_ITEMS.map(item => (
+        {NAV_ITEMS.filter(item => !(isViewer && item.to === '/customers')).map(item => (
           <NavLink key={item.to} to={item.to} end={item.exact} style={navLinkStyle}>
             <item.Icon /> {item.label}
           </NavLink>

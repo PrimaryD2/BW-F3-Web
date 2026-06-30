@@ -26,6 +26,8 @@ async function authenticateToken(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Customer-portal tokens must never authenticate against the staff app
+    if (decoded.kind === 'customer') return res.status(403).json({ error: 'Invalid token' });
     const rows = await query(
       'SELECT id, name, username, role, active, force_password_change FROM users WHERE id = ? AND active = 1',
       [decoded.id]

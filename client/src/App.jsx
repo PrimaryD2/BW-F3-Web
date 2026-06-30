@@ -1,4 +1,4 @@
-import React, { lazy } from 'react';
+import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
@@ -23,6 +23,9 @@ const PlannedMaintenance = lazy(() => import('./pages/PlannedMaintenance'));
 const CustomerList       = lazy(() => import('./pages/CustomerList'));
 const CustomerDetail     = lazy(() => import('./pages/CustomerDetail'));
 const Components         = lazy(() => import('./pages/Components'));
+const PortalLogin        = lazy(() => import('./pages/PortalLogin'));
+const Portal             = lazy(() => import('./pages/Portal'));
+const PortalChangePassword = lazy(() => import('./pages/PortalChangePassword'));
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -42,6 +45,11 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/change-password" element={<ChangePassword />} />
 
+      {/* Customer portal — separate public area with its own login/session */}
+      <Route path="/portal/login" element={<Suspense fallback={null}><PortalLogin /></Suspense>} />
+      <Route path="/portal/change-password" element={<Suspense fallback={null}><PortalChangePassword /></Suspense>} />
+      <Route path="/portal" element={<Suspense fallback={null}><Portal /></Suspense>} />
+
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
@@ -55,8 +63,8 @@ function AppRoutes() {
         <Route path="fleet/:id" element={<FleetDetail />} />
         <Route path="gallery" element={<AircraftGallery />} />
         <Route path="planned-maintenance" element={<PlannedMaintenance />} />
-        <Route path="customers" element={<CustomerList />} />
-        <Route path="customers/:id" element={<CustomerDetail />} />
+        <Route path="customers" element={<ProtectedRoute roles={['admin', 'supervisor', 'worker']}><CustomerList /></ProtectedRoute>} />
+        <Route path="customers/:id" element={<ProtectedRoute roles={['admin', 'supervisor', 'worker']}><CustomerDetail /></ProtectedRoute>} />
         <Route path="components" element={<Components />} />
         <Route path="admin" element={
           <ProtectedRoute roles={['admin']}>
