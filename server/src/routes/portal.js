@@ -5,7 +5,7 @@ const { query } = require('../config/db');
 const { JWT_SECRET } = require('../middleware/auth');
 
 const router = express.Router();
-const TOKEN_TTL = '30d'; // long-lived so customers keep access between visits
+const TOKEN_TTL = '8h'; // session length (matches staff)
 
 // ─── Customer auth middleware ─────────────────────────────────────────────────
 async function authenticateCustomer(req, res, next) {
@@ -203,6 +203,9 @@ router.get('/maintenance-requests', async (req, res) => {
 
 router.post('/maintenance-requests', async (req, res) => {
   const { aircraft_id, requested_date, notes } = req.body || {};
+  if (!aircraft_id) return res.status(400).json({ error: 'Please choose an aircraft' });
+  if (!requested_date) return res.status(400).json({ error: 'Please choose a preferred date' });
+  if (!String(notes || '').trim()) return res.status(400).json({ error: 'Please describe what you need done' });
   try {
     // Only allow booking against the customer's own aircraft
     let validAircraftId = null;
@@ -210,6 +213,7 @@ router.post('/maintenance-requests', async (req, res) => {
       const own = await query('SELECT id FROM fleet_aircraft WHERE id = ? AND customer_id = ?', [aircraft_id, req.customer.id]);
       if (own.length) validAircraftId = aircraft_id;
     }
+    if (!validAircraftId) return res.status(400).json({ error: 'Invalid aircraft' });
     const r = await query(
       'INSERT INTO portal_maintenance_requests (customer_id, aircraft_id, requested_date, notes) VALUES (?,?,?,?)',
       [req.customer.id, validAircraftId, requested_date || null, notes || null]

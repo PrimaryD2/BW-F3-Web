@@ -72,7 +72,7 @@ router.get('/', async (req, res) => {
       SELECT
         c.id, c.full_name, c.company_name, c.country, c.city,
         c.email, c.phone, c.status, c.priority, c.customer_type,
-        c.source, c.interested_aircraft,
+        c.source, c.interested_aircraft, c.portal_enabled,
         c.last_contact_date, c.next_followup_date,
         c.assigned_employee_id, u.name AS assigned_employee_name,
         c.created_at, c.updated_at,
@@ -255,11 +255,21 @@ router.get('/maintenance-requests/all', async (_req, res) => {
 });
 
 router.put('/maintenance-requests/:rid', async (req, res) => {
-  const { status } = req.body || {};
+  const { status, staff_response } = req.body || {};
   try {
-    await query('UPDATE portal_maintenance_requests SET status = ? WHERE id = ?', [status || 'new', req.params.rid]);
+    const sets = [], vals = [];
+    if (status !== undefined) { sets.push('status = ?'); vals.push(status || 'new'); }
+    if (staff_response !== undefined) { sets.push('staff_response = ?'); vals.push(staff_response || null); }
+    if (sets.length) { vals.push(req.params.rid); await query(`UPDATE portal_maintenance_requests SET ${sets.join(', ')} WHERE id = ?`, vals); }
     res.json({ ok: true });
   } catch (err) { console.error('PUT /customers/maintenance-requests/:rid error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+router.delete('/maintenance-requests/:rid', async (req, res) => {
+  try {
+    await query('DELETE FROM portal_maintenance_requests WHERE id = ?', [req.params.rid]);
+    res.json({ ok: true });
+  } catch (err) { console.error('DELETE /customers/maintenance-requests/:rid error:', err); res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── PUT /api/customers/:id/portal — manage portal login (enable + password) ──

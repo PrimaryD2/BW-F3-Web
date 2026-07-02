@@ -43,6 +43,8 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/verify-password', authLimiter);
+// The customer-portal login is an equally attractive brute-force target — limit it too.
+app.use('/api/portal/login', authLimiter);
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/auth',        authRoutes);

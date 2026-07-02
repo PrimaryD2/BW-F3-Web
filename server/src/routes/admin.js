@@ -1,11 +1,29 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+const multer = require('multer');
 const { query } = require('../config/db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authenticateToken, requireRole('admin'));
 const VALID_ROLES = ['admin', 'supervisor', 'worker', 'viewer'];
+
+// Image upload for portal news (stored alongside fleet uploads → served at /uploads/fleet/<file>)
+const NEWS_UPLOAD_DIR = path.join(__dirname, '../../uploads/fleet');
+const newsUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, NEWS_UPLOAD_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.round(Math.random() * 1e6)}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  // Only allow images — these files are served statically from the same origin,
+  // so accepting .html/.svg would open a stored-XSS vector.
+  fileFilter: (_req, file, cb) => {
+    if (/^image\//i.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
+});
 
 function normalizeRole(role) {
   return String(role || '').trim().toLowerCase();
@@ -544,16 +562,18 @@ router.get('/portal-news', async (_req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
-router.post('/portal-news', async (req, res) => {
-  const { title, body, audience = 'all', recipient_ids = [] } = req.body || {};
+router.post('/portal-news', newsUpload.single('image'), async (req, res) => {
+  const { title, body, audience = 'all' } = req.body || {};
+  let recipient_ids = req.body.recipient_ids || [];
+  if (typeof recipient_ids === 'string') { try { recipient_ids = JSON.parse(recipient_ids); } catch { recipient_ids = []; } }
   if (!String(title || '').trim()) return res.status(400).json({ error: 'Title is required' });
   try {
     const r = await query(
-      'INSERT INTO portal_news (title, body, audience, created_by) VALUES (?,?,?,?)',
-      [title.trim(), body || null, audience === 'selected' ? 'selected' : 'all', req.user.id]
+      'INSERT INTO portal_news (title, body, audience, image_filename, created_by) VALUES (?,?,?,?,?)',
+      [title.trim(), body || null, audience === 'selected' ? 'selected' : 'all', req.file ? req.file.filename : null, req.user.id]
     );
     if (audience === 'selected') {
-      for (const cid of recipient_ids) {
+      for (const cid of (recipient_ids || [])) {
         if (cid) await query('INSERT IGNORE INTO portal_news_recipients (news_id, customer_id) VALUES (?,?)', [r.insertId, Number(cid)]);
       }
     }

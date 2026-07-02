@@ -9,7 +9,7 @@ import {
   getFleetList, getFleetServiceTemplates, getFleetConfigOptions,
   updateCustomerPortal, updateFleetAircraft,
   getProgressPhotos, uploadProgressPhoto, deleteProgressPhoto,
-  getMaintenanceRequests, updateMaintenanceRequest,
+  getMaintenanceRequests, updateMaintenanceRequest, deleteMaintenanceRequest,
 } from '../api/index';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -1499,7 +1499,14 @@ function BookServiceModal({ customerId, onSave, onCancel }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Customer Portal management card
 // ═══════════════════════════════════════════════════════════════════════════════
-const PROD_STAGES = ['F1', 'F2W', 'F2F', 'F3', 'F4', 'F5'];
+const PROD_STAGES = [
+  { value: 'F1', label: 'F1 · Carbon Fiber Parts Layup' },
+  { value: 'F2', label: 'F2 · Fuselage & Wings Assembly' },
+  { value: 'F3', label: 'F3 · Final Assembly' },
+  { value: 'F4', label: 'F4 · Paint' },
+  { value: 'F5', label: 'F5 · Test flights & Finishing' },
+  { value: 'READY', label: 'Ready for Delivery' },
+];
 
 // One linked aircraft: production stage, unlink, and customer-facing progress photos
 function AircraftPortalRow({ a, onChanged }) {
@@ -1530,7 +1537,7 @@ function AircraftPortalRow({ a, onChanged }) {
           Stage:
           <select value={a.production_stage || ''} onChange={e => setStage(e.target.value)}>
             <option value="">— Not set —</option>
-            {PROD_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+            {PROD_STAGES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFile} />
@@ -1555,9 +1562,10 @@ function AircraftPortalRow({ a, onChanged }) {
 }
 
 const REQ_STATUSES = ['new', 'reviewed', 'scheduled', 'declined'];
-function MaintenanceRequestsCard({ customerId }) {
+function MaintenanceRequestsCard({ customerId, isAdmin }) {
   const toast = useToast();
   const [reqs, setReqs] = useState([]);
+  const [replyDrafts, setReplyDrafts] = useState({});
   useEffect(() => {
     getMaintenanceRequests().then(r => setReqs((r.data || []).filter(x => String(x.customer_id) === String(customerId)))).catch(() => {});
   }, [customerId]);
@@ -1565,19 +1573,44 @@ function MaintenanceRequestsCard({ customerId }) {
     try { await updateMaintenanceRequest(rid, { status }); setReqs(rs => rs.map(x => x.id === rid ? { ...x, status } : x)); }
     catch { toast.error('Failed'); }
   }
+  async function saveReply(rid) {
+    const text = replyDrafts[rid] ?? '';
+    try { await updateMaintenanceRequest(rid, { staff_response: text }); setReqs(rs => rs.map(x => x.id === rid ? { ...x, staff_response: text } : x)); toast.success('Reply sent to customer'); }
+    catch { toast.error('Failed'); }
+  }
+  async function remove(rid) {
+    if (!window.confirm('Delete this request?')) return;
+    try { await deleteMaintenanceRequest(rid); setReqs(rs => rs.filter(x => x.id !== rid)); }
+    catch { toast.error('Failed'); }
+  }
   if (reqs.length === 0) return null;
   return (
     <div className="card" style={{ marginBottom: 20, borderLeft: '4px solid #f59e0b' }}>
       <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>🛠 Maintenance Requests from Portal</div>
       {reqs.map(r => (
-        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{r.bw_serial ? `BW-${r.bw_serial}` : 'Aircraft not specified'}{r.requested_date ? ` · requested ${new Date(r.requested_date).toLocaleDateString('en-GB')}` : ''}</div>
-            {r.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{r.notes}</div>}
+        <div key={r.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                {r.status === 'new' && <span style={{ color: '#f59e0b', marginRight: 6 }}>● NEW</span>}
+                {r.bw_serial ? `BW-${r.bw_serial}` : 'Aircraft not specified'}{r.requested_date ? ` · requested ${new Date(r.requested_date).toLocaleDateString('en-GB')}` : ''}
+              </div>
+              {r.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{r.notes}</div>}
+            </div>
+            <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} style={{ textTransform: 'capitalize' }}>
+              {REQ_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {isAdmin && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)', fontSize: 11 }} onClick={() => remove(r.id)}>Delete</button>}
           </div>
-          <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} style={{ textTransform: 'capitalize' }}>
-            {REQ_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <input
+              style={{ flex: '1 1 260px', fontSize: 13 }}
+              placeholder="Reply to the customer (shown on their portal)…"
+              value={replyDrafts[r.id] ?? r.staff_response ?? ''}
+              onChange={e => setReplyDrafts(d => ({ ...d, [r.id]: e.target.value }))}
+            />
+            <button className="btn btn-ghost btn-sm" onClick={() => saveReply(r.id)}>Send reply</button>
+          </div>
         </div>
       ))}
     </div>
@@ -1972,7 +2005,7 @@ export default function CustomerDetail() {
           onChanged={() => { loadCustomer(); reloadFleet(); }}
         />
       )}
-      {isSupervisor && <MaintenanceRequestsCard customerId={customer.id} />}
+      {isSupervisor && <MaintenanceRequestsCard customerId={customer.id} isAdmin={isAdmin} />}
 
       {/* ── Buying Process / Aircraft Configurations ── */}
       <div className="card" style={{ marginBottom: 20 }}>

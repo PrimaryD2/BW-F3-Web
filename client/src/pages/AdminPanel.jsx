@@ -19,7 +19,7 @@ import {
 import { useToast } from '../context/ToastContext';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
-const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings', 'Portal News', 'FAQ'];
+const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings', 'Customer Portal'];
 const FORM_TABS = ['Setup', 'Documentation', 'Materials'];
 
 const CONFIG_CATEGORIES = ['Engine', 'Propeller', 'Avionics', 'Interior', 'Paint'];
@@ -59,8 +59,26 @@ export default function AdminPanel() {
       {tab === 6 && <ComponentTypesSection />}
       {tab === 7 && <ComponentNamesSection />}
       {tab === 8 && <SettingsSection />}
-      {tab === 9 && <PortalNewsSection />}
-      {tab === 10 && <PortalFaqSection />}
+      {tab === 9 && <CustomerPortalSection />}
+    </div>
+  );
+}
+
+// ─── Customer Portal (News + FAQ under one section) ───────────────────────────
+function CustomerPortalSection() {
+  const [sub, setSub] = useState('news');
+  const subBtn = (active) => ({
+    background: 'none', border: 'none', padding: '8px 16px', cursor: 'pointer', fontSize: 13,
+    fontWeight: active ? 700 : 500, color: active ? 'var(--accent)' : 'var(--text-secondary)',
+    borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent', marginBottom: -1,
+  });
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)' }}>
+        <button style={subBtn(sub === 'news')} onClick={() => setSub('news')}>News</button>
+        <button style={subBtn(sub === 'faq')} onClick={() => setSub('faq')}>FAQ</button>
+      </div>
+      {sub === 'news' ? <PortalNewsSection /> : <PortalFaqSection />}
     </div>
   );
 }
@@ -72,6 +90,9 @@ function PortalNewsSection() {
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ title: '', body: '', audience: 'all', recipient_ids: [] });
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { load(); }, []);
@@ -80,16 +101,28 @@ function PortalNewsSection() {
     try {
       const [nRes, cRes] = await Promise.all([getPortalNews(), getCustomers()]);
       setNews(nRes.data || []);
-      setCustomers((cRes.data || []).filter(c => c.portal_enabled));
+      setCustomers((cRes.data || []).filter(c => Number(c.portal_enabled) === 1));
     } finally { setLoading(false); }
+  }
+  function onImage(e) {
+    const file = e.target.files[0];
+    setImageFile(file || null);
+    setImagePreview(file ? URL.createObjectURL(file) : '');
   }
   async function handleAdd(e) {
     e.preventDefault();
     if (!form.title.trim()) { toast.error('Title is required'); return; }
     setSaving(true);
     try {
-      await createPortalNews(form);
+      const fd = new FormData();
+      fd.append('title', form.title.trim());
+      fd.append('body', form.body || '');
+      fd.append('audience', form.audience);
+      fd.append('recipient_ids', JSON.stringify(form.recipient_ids || []));
+      if (imageFile) fd.append('image', imageFile);
+      await createPortalNews(fd);
       setForm({ title: '', body: '', audience: 'all', recipient_ids: [] });
+      setImageFile(null); setImagePreview(''); setShowPreview(false);
       toast.success('Published');
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -121,6 +154,11 @@ function PortalNewsSection() {
             <label>Message</label>
             <textarea rows={3} value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))} />
           </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>Picture (optional)</label>
+            <input type="file" accept="image/*" onChange={onImage} />
+            {imagePreview && <img src={imagePreview} alt="" style={{ marginTop: 8, maxHeight: 160, borderRadius: 8, display: 'block' }} />}
+          </div>
           <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
               <input type="radio" checked={form.audience === 'all'} onChange={() => setForm(f => ({ ...f, audience: 'all' }))} /> All portal customers
@@ -139,7 +177,18 @@ function PortalNewsSection() {
               })}
             </div>
           )}
-          <button type="submit" className="btn btn-primary" disabled={saving} style={{ alignSelf: 'flex-start' }}>{saving ? 'Publishing…' : '+ Publish'}</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-ghost" onClick={() => setShowPreview(p => !p)}>{showPreview ? 'Hide preview' : '👁 Preview'}</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Publishing…' : '+ Publish'}</button>
+          </div>
+          {showPreview && (
+            <div style={{ border: '1px solid var(--accent)', borderRadius: 10, padding: 16, background: 'var(--bg-secondary)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 8 }}>Preview — how the customer sees it</div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{form.title || '(no title)'}</div>
+              {imagePreview && <img src={imagePreview} alt="" style={{ width: '100%', maxHeight: 300, objectFit: 'cover', borderRadius: 8, marginTop: 10 }} />}
+              {form.body && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 10, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{form.body}</div>}
+            </div>
+          )}
         </form>
       </div>
       {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading…</p> : news.length === 0 ? (
@@ -150,6 +199,7 @@ function PortalNewsSection() {
             <div style={{ fontWeight: 700 }}>{n.title}</div>
             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(n.id)}>Delete</button>
           </div>
+          {n.image_filename && <img src={`/uploads/fleet/${n.image_filename}`} alt="" style={{ maxHeight: 120, borderRadius: 6, marginTop: 6, display: 'block' }} />}
           {n.body && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{n.body}</div>}
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
             {n.audience === 'all' ? 'All portal customers' : `Selected: ${(n.recipients || []).map(r => r.full_name).join(', ') || '—'}`}

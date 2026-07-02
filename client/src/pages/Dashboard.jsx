@@ -5,6 +5,7 @@ import {
   getFleetList,
   getFleetUpcomingServices,
   getFleetPlannedMaintenance,
+  getMaintenanceRequests,
 } from '../api';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -54,21 +55,24 @@ export default function Dashboard() {
   const [fleet, setFleet]       = useState([]);
   const [services, setServices] = useState([]);
   const [planned, setPlanned]   = useState([]);
+  const [portalReqs, setPortalReqs] = useState([]);
   const [loading, setLoading]   = useState(true);
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
   useEffect(() => {
     (async () => {
-      const [sRes, fRes, svcRes, pmRes] = await Promise.allSettled([
+      const [sRes, fRes, svcRes, pmRes, mrRes] = await Promise.allSettled([
         getDashboardStats(),
         getFleetList(),
         getFleetUpcomingServices(),
         getFleetPlannedMaintenance(),
+        getMaintenanceRequests(),
       ]);
       if (sRes.status === 'fulfilled')   setStats(sRes.value.data);
       if (fRes.status === 'fulfilled')   setFleet(fRes.value.data || []);
       if (svcRes.status === 'fulfilled') setServices(svcRes.value.data || []);
       if (pmRes.status === 'fulfilled')  setPlanned(pmRes.value.data || []);
+      if (mrRes.status === 'fulfilled')  setPortalReqs(mrRes.value.data || []);
       setLoading(false);
     })();
   }, []);
@@ -91,7 +95,9 @@ export default function Dashboard() {
     return fleet.filter(a => Number(a.open_bulletin_count) > 0).sort((a, b) => b.open_bulletin_count - a.open_bulletin_count);
   }, [fleet]);
 
-  const hasAlerts = airworthinessAlerts.length > 0 || serviceAlerts.length > 0 || bulletinAlerts.length > 0;
+  const newRequests = useMemo(() => portalReqs.filter(r => r.status === 'new'), [portalReqs]);
+
+  const hasAlerts = airworthinessAlerts.length > 0 || serviceAlerts.length > 0 || bulletinAlerts.length > 0 || newRequests.length > 0;
 
   // ── Upcoming planned maintenance (next 30 days) ──
   const upcomingPlanned = useMemo(() => {
@@ -147,6 +153,25 @@ export default function Dashboard() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
+          {/* New portal maintenance requests */}
+          {newRequests.length > 0 && (
+            <AlertCard title="New Portal Requests" icon="📩" accent="#6366f1" count={newRequests.length}>
+              {newRequests.slice(0, 8).map(r => (
+                <div
+                  key={r.id}
+                  onClick={() => navigate(`/customers/${r.customer_id}`)}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 0', cursor: 'pointer', fontSize: 13, borderTop: '1px solid var(--border)' }}
+                >
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <strong>{r.customer_name}</strong>{r.bw_serial ? ` · BW-${r.bw_serial}` : ''}
+                  </span>
+                  <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</span>
+                </div>
+              ))}
+              {newRequests.length > 8 && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>+ {newRequests.length - 8} more</div>}
+            </AlertCard>
+          )}
+
           {/* Airworthiness */}
           {airworthinessAlerts.length > 0 && (
             <AlertCard title="Airworthiness Expiring" icon="🔴" accent="#ef4444" count={airworthinessAlerts.length}>

@@ -674,6 +674,12 @@ const ALTER_STMTS = [
      FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
      FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE SET NULL
    )`,
+  // Staff reply to a maintenance request (shown to the customer)
+  `ALTER TABLE portal_maintenance_requests ADD COLUMN IF NOT EXISTS staff_response TEXT NULL`,
+  // News: optional image
+  `ALTER TABLE portal_news ADD COLUMN IF NOT EXISTS image_filename VARCHAR(300) NULL`,
+  // Remap old production stages (F2W/F2F merged into F2)
+  `UPDATE fleet_aircraft SET production_stage = 'F2' WHERE production_stage IN ('F2W','F2F')`,
   // Bulletins: target specific aircraft / airplane numbers (comma-separated list of bw_serial or aircraft_number)
   `ALTER TABLE fleet_bulletins ADD COLUMN IF NOT EXISTS aircraft_numbers VARCHAR(500) NULL`,
   // Planned maintenance: customer-facing work order number

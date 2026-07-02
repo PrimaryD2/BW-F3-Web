@@ -7,8 +7,12 @@ import {
 } from '../api/portal';
 
 const STAGES = [
-  { key: 'F1',  desc: 'Fuselage' }, { key: 'F2W', desc: 'Wings' }, { key: 'F2F', desc: 'Final fuselage' },
-  { key: 'F3',  desc: 'Assembly' }, { key: 'F4',  desc: 'Systems & paint' }, { key: 'F5',  desc: 'Finishing & delivery' },
+  { key: 'F1',    short: 'F1', desc: 'Carbon Fiber Parts Layup' },
+  { key: 'F2',    short: 'F2', desc: 'Fuselage & Wings Assembly' },
+  { key: 'F3',    short: 'F3', desc: 'Final Assembly' },
+  { key: 'F4',    short: 'F4', desc: 'Paint' },
+  { key: 'F5',    short: 'F5', desc: 'Test flights & Finishing' },
+  { key: 'READY', short: '🛩', desc: 'Aircraft Ready For Delivery' },
 ];
 const DONE_STATUSES = new Set(['completed', 'delivered', 'in_service']);
 const BULLETIN_LABELS = { mandatory: 'Mandatory', obligatory: 'Obligatory', recommended: 'Recommended', optional: 'Optional' };
@@ -34,9 +38,9 @@ function ProductionProgress({ aircraft }) {
           <React.Fragment key={s.key}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 80 }}>
               <div style={{ width: 40, height: 40, borderRadius: '50%', background: done ? '#22c55e' : current ? '#3b82f622' : 'transparent', border: `2px solid ${color}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, color: done ? '#fff' : tc }}>
-                {done ? '✓' : s.key}
+                {done ? '✓' : s.short}
               </div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: tc }}>{s.key}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: tc }}>{s.key === 'READY' ? 'Ready' : s.key}</div>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.3 }}>{s.desc}</div>
             </div>
             {i < STAGES.length - 1 && <div style={{ flex: 1, height: 2, minWidth: 18, background: (allDone || i < currentIdx) ? '#22c55e' : 'var(--border)', marginTop: 19 }} />}
@@ -67,14 +71,14 @@ function QuoteCard({ q }) {
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(q.created_at)}</div>
       </div>
       {Object.keys(byCat).length > 0 && (
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ borderTop: '1px solid var(--border)', marginBottom: 14 }}>
           {Object.entries(byCat).map(([cat, opts]) => (
-            <div key={cat} style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 2 }}>{cat}</div>
+            <div key={cat} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--accent)', marginBottom: 4 }}>{cat}</div>
               {opts.map(o => (
-                <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
                   <span>{o.option_label}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>
+                  <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap', paddingLeft: 12 }}>
                     {o.weight_kg != null ? `${Number(o.weight_kg) > 0 ? '+' : ''}${Number(o.weight_kg)} kg` : ''}
                     {o.option_price != null && Number(o.option_price) > 0 ? `  ·  +€${Number(o.option_price).toLocaleString('de-DE')}` : ''}
                   </span>
@@ -167,6 +171,9 @@ export default function Portal() {
 
   async function submitBooking(e) {
     e.preventDefault();
+    if (!bookAircraft) { setBookMsg('Please choose an aircraft.'); return; }
+    if (!bookDate) { setBookMsg('Please choose a preferred date.'); return; }
+    if (!bookNotes.trim()) { setBookMsg('Please describe what you need done.'); return; }
     setBooking(true); setBookMsg('');
     try {
       await portalCreateRequest({ aircraft_id: bookAircraft || null, requested_date: bookDate || null, notes: bookNotes || null });
@@ -266,7 +273,11 @@ export default function Portal() {
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{n.title}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtDate(n.created_at)}</div>
                 </div>
-                {n.body && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{n.body}</div>}
+                {n.image_filename && (
+                  <img src={`/uploads/fleet/${n.image_filename}`} alt="" loading="lazy"
+                    style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 8, marginTop: 10 }} />
+                )}
+                {n.body && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 10, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{n.body}</div>}
               </div>
             ))}
 
@@ -302,7 +313,7 @@ export default function Portal() {
                 </label>
                 <label className="form-group" style={{ margin: 0 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Preferred date</span>
-                  <input type="date" value={bookDate} onChange={e => setBookDate(e.target.value)} />
+                  <input type="date" value={bookDate} min={new Date().toISOString().slice(0, 10)} max="9999-12-31" onChange={e => setBookDate(e.target.value)} />
                 </label>
                 <label className="form-group" style={{ margin: 0 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>What do you need done?</span>
@@ -315,15 +326,25 @@ export default function Portal() {
             {requests.length > 0 && (
               <>
                 <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>Your Requests</div>
-                {requests.map(r => (
-                  <div key={r.id} className="card" style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{r.bw_serial ? `BW-${r.bw_serial}` : 'Aircraft not specified'}{r.requested_date ? ` · ${fmtDate(r.requested_date)}` : ''}</div>
-                      {r.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3 }}>{r.notes}</div>}
+                {requests.map(r => {
+                  const sc = r.status === 'scheduled' ? '#22c55e' : r.status === 'declined' ? '#ef4444' : r.status === 'reviewed' ? '#3b82f6' : '#f59e0b';
+                  return (
+                    <div key={r.id} className="card" style={{ marginBottom: 10 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{r.bw_serial ? `BW-${r.bw_serial}` : 'Aircraft not specified'}{r.requested_date ? ` · ${fmtDate(r.requested_date)}` : ''}</div>
+                          {r.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3 }}>{r.notes}</div>}
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12, alignSelf: 'flex-start', background: sc + '22', color: sc, border: `1px solid ${sc}44`, textTransform: 'capitalize' }}>{r.status}</span>
+                      </div>
+                      {r.staff_response && (
+                        <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--bg-secondary)', borderLeft: '3px solid var(--accent)', borderRadius: 4, fontSize: 13 }}>
+                          <strong style={{ color: 'var(--accent)' }}>Blackwing reply:</strong> {r.staff_response}
+                        </div>
+                      )}
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12, alignSelf: 'flex-start', background: 'var(--bg-hover)', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{r.status}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </>

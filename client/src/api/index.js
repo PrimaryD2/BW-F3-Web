@@ -191,6 +191,7 @@ export const archiveCustomer      = (id)       => api.delete(`/customers/${id}`)
 export const updateCustomerPortal = (id, d)    => api.put(`/customers/${id}/portal`, d);
 export const getMaintenanceRequests = ()       => api.get('/customers/maintenance-requests/all');
 export const updateMaintenanceRequest = (rid, d) => api.put(`/customers/maintenance-requests/${rid}`, d);
+export const deleteMaintenanceRequest = (rid)  => api.delete(`/customers/maintenance-requests/${rid}`);
 
 // ─── Progress photos (customer-facing, per aircraft) ───────────────────────────
 export const getProgressPhotos   = (id)        => api.get(`/fleet/${id}/progress-photos`);
@@ -200,7 +201,7 @@ export const deleteProgressPhoto = (id, pid)   => api.delete(`/fleet/${id}/progr
 
 // ─── Portal admin (news + FAQ) ─────────────────────────────────────────────────
 export const getPortalNews    = ()        => api.get('/admin/portal-news');
-export const createPortalNews = (d)       => api.post('/admin/portal-news', d);
+export const createPortalNews = (formData) => api.post('/admin/portal-news', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const deletePortalNews = (id)      => api.delete(`/admin/portal-news/${id}`);
 export const getPortalFaq     = ()        => api.get('/admin/faq');
 export const createPortalFaq  = (d)       => api.post('/admin/faq', d);
