@@ -138,6 +138,7 @@ const AIRCRAFT_SELECT = `
 const PLANNED_MAINTENANCE_SELECT = `
   fpm.id, fpm.aircraft_id, fpm.template_id, fpm.customer_id, fpm.work_order_number,
   fpm.planned_date, COALESCE(fpm.planned_arrival_date, fpm.planned_date) AS planned_arrival_date,
+  fpm.planned_departure_date,
   fpm.assigned_technician_id, fpm.assigned_technicians, fpm.planned_comments,
   fpm.status, fpm.completed_date, fpm.labor_hours, fpm.additional_work,
   fpm.signoff_notes, fpm.signed_off_by, fpm.signed_off_at, fpm.created_at,
@@ -741,8 +742,10 @@ router.get('/:id', async (req, res) => {
       query('SELECT * FROM fleet_images WHERE aircraft_id = ? ORDER BY sort_order, id', [req.params.id]),
       query('SELECT option_id FROM fleet_aircraft_config WHERE aircraft_id = ?', [req.params.id]),
       query(
-        `SELECT fsr.*, u.name AS logged_by_name FROM fleet_service_records fsr
+        `SELECT fsr.*, u.name AS logged_by_name, fst.title AS template_title, fst.category
+         FROM fleet_service_records fsr
          LEFT JOIN users u ON fsr.logged_by = u.id
+         LEFT JOIN fleet_service_templates fst ON fst.id = fsr.template_id
          WHERE fsr.aircraft_id = ? ORDER BY fsr.completed_date DESC, fsr.id DESC`,
         [req.params.id]
       ),
@@ -925,7 +928,7 @@ router.post('/:id/services', async (req, res) => {
 
 // POST /api/fleet/:id/planned-maintenance
 router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, items = [], customer_id, work_order_number } = req.body;
+  const { planned_arrival_date, planned_departure_date, assigned_technician_id, assigned_technicians, planned_comments, items = [], customer_id, work_order_number } = req.body;
 
   if (!planned_arrival_date) {
     return res.status(400).json({ error: 'planned_arrival_date is required' });
@@ -933,15 +936,18 @@ router.post('/:id/planned-maintenance', requireRole('admin', 'supervisor'), asyn
   if (!items.length) {
     return res.status(400).json({ error: 'At least one work item is required' });
   }
+  if (planned_departure_date && planned_departure_date < planned_arrival_date) {
+    return res.status(400).json({ error: 'Leave date cannot be before the arrival date' });
+  }
 
   try {
     const primaryTemplateId = items.find(i => i.template_id)?.template_id || null;
 
     const result = await query(
       `INSERT INTO fleet_planned_maintenance
-       (aircraft_id, customer_id, template_id, planned_date, planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, planned_by, work_order_number)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [req.params.id, customer_id || null, primaryTemplateId, planned_arrival_date, planned_arrival_date,
+       (aircraft_id, customer_id, template_id, planned_date, planned_arrival_date, planned_departure_date, assigned_technician_id, assigned_technicians, planned_comments, planned_by, work_order_number)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [req.params.id, customer_id || null, primaryTemplateId, planned_arrival_date, planned_arrival_date, planned_departure_date || null,
        assigned_technician_id || null, assigned_technicians || null, planned_comments || null, req.user.id, work_order_number || null]
     );
 
@@ -1014,8 +1020,8 @@ router.put('/planned-maintenance/items/:itemId/signoff', requireRole('admin', 's
         );
       } else {
         const sr = await query(
-          `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by) VALUES (?,?,?,?,?,?,?)`,
-          [item.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, notes || null, req.user.id]
+          `INSERT INTO fleet_service_records (aircraft_id, template_id, completed_date, hours_at_completion, signed_by, notes, logged_by, planned_id) VALUES (?,?,?,?,?,?,?,?)`,
+          [item.aircraft_id, item.template_id, safeDate, hrsAtCompletion, techName, notes || null, req.user.id, item.planned_id || null]
         );
         recordId = Number(sr.insertId);
       }
@@ -1089,9 +1095,12 @@ router.delete('/planned-maintenance/items/:itemId/photos/:photoId', requireRole(
 
 // PUT /api/fleet/planned-maintenance/:pid
 router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), async (req, res) => {
-  const { planned_arrival_date, assigned_technician_id, assigned_technicians, planned_comments, items, work_order_number, customer_id } = req.body;
+  const { planned_arrival_date, planned_departure_date, assigned_technician_id, assigned_technicians, planned_comments, items, work_order_number, customer_id } = req.body;
   if (!planned_arrival_date) {
     return res.status(400).json({ error: 'planned_arrival_date is required' });
+  }
+  if (planned_departure_date && planned_departure_date < planned_arrival_date) {
+    return res.status(400).json({ error: 'Leave date cannot be before the arrival date' });
   }
 
   try {
@@ -1102,6 +1111,7 @@ router.put('/planned-maintenance/:pid', requireRole('admin', 'supervisor'), asyn
       'assigned_technician_id = ?', 'planned_comments = ?',
     ];
     const setValues = [planned_arrival_date, planned_arrival_date, assigned_technician_id || null, planned_comments || null];
+    if (planned_departure_date !== undefined) { setClauses.push('planned_departure_date = ?'); setValues.push(planned_departure_date || null); }
     if (assigned_technicians !== undefined) { setClauses.push('assigned_technicians = ?'); setValues.push(assigned_technicians || null); }
     if (customer_id !== undefined) { setClauses.push('customer_id = ?'); setValues.push(customer_id || null); }
     if (primaryTemplateId !== undefined) { setClauses.push('template_id = ?'); setValues.push(primaryTemplateId); }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
   getFleetAircraft, updateFleetAircraft,
@@ -22,6 +22,7 @@ import {
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { parseBuildStatuses, buildStatusBadge, buildStatusLabel } from '../utils/buildStatus';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,24 +46,6 @@ function fmtBytes(n) {
 }
 const AIRCRAFT_EDIT_TABS = new Set(['Overview', 'Maintenance']); // tabs that save via handleSave
 
-const BUILD_STATUS_BADGE = {
-  in_production: 'badge-info',
-  completed:     'badge-success',
-  delivered:     'badge-success',
-  in_service:    'badge-success',
-  stored:        'badge-ghost',
-  for_sale:      'badge-warning',
-  written_off:   'badge-danger',
-};
-const BUILD_STATUS_LABEL = {
-  in_production: 'In Production',
-  completed:     'Completed',
-  delivered:     'Delivered',
-  in_service:    'In Service',
-  stored:        'Stored',
-  for_sale:      'For Sale',
-  written_off:   'Written Off',
-};
 const MODEL_FALLBACKS = ['BW600', 'BW635RG', 'BW650', 'Other'];
 const EVENT_TYPES = ['service', 'upgrade', 'inspection', 'incident', 'repaint', 'avionics_update', 'ownership_change', 'other'];
 const EVENT_TYPE_LABEL = {
@@ -79,7 +62,7 @@ const DEFAULT_COMPONENTS = ['Engine', 'Propeller', 'Governor', 'ECU', 'Fusebox']
 const EMPTY_CONTACT = { name: '', role: '', email: '', phone: '' };
 const EMPTY_EVENT   = { event_date: '', event_type: 'service', title: '', description: '', hours_at_event: '' };
 const EMPTY_COMPLETION = { completed_date: '', hours_at_completion: '', signed_by: '', notes: '' };
-const EMPTY_PLANNED_MAINTENANCE = { planned_arrival_date: '', assigned_technicians: '', planned_comments: '', work_order_number: '', items: [] };
+const EMPTY_PLANNED_MAINTENANCE = { planned_arrival_date: '', planned_departure_date: '', assigned_technicians: '', planned_comments: '', work_order_number: '', items: [] };
 const EMPTY_PM_ITEM = { template_id: '', title: '', description: '', work_category: 'normal' };
 
 // ─── CSS Flag icon — works cross-platform (no emoji needed) ──────────────────
@@ -333,11 +316,20 @@ function WBSection({ form, aircraft, canEdit, setF }) {
 
 // ─── Configuration Tab (top-level to avoid re-mount) ─────────────────────────
 
+const CONFIG_CAT_ICONS = {
+  engine: '🔧', propeller: '🌀', avionics: '📟', interior: '🪑', exterior: '🎨',
+  paint: '🎨', instruments: '🎛', lighting: '💡', fuel: '⛽', landing: '🛞', safety: '🦺',
+};
+function configCatIcon(cat) {
+  const key = String(cat || '').toLowerCase();
+  for (const k of Object.keys(CONFIG_CAT_ICONS)) if (key.includes(k)) return CONFIG_CAT_ICONS[k];
+  return '◆';
+}
+
 function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle, singleSelectCategories }) {
   const singleCats = singleSelectCategories || new Set();
   const grouped = configOptions.reduce((acc, o) => {
-    if (!acc[o.category]) acc[o.category] = [];
-    acc[o.category].push(o);
+    (acc[o.category] ||= []).push(o);
     return acc;
   }, {});
 
@@ -346,51 +338,91 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle, singleSel
       <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
         <div style={{ fontSize: 32, marginBottom: 12 }}>⚙</div>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>No configuration options defined</div>
-        <p style={{ fontSize: 13 }}>Go to <strong>Admin → Fleet Config</strong> to add engine, propeller, avionics, and other options.</p>
+        <p style={{ fontSize: 13 }}>Go to <strong>Admin → Configuration Config</strong> to add engine, propeller, avionics, and other options.</p>
       </div>
     );
   }
 
+  // Selection summary
+  const selectedOpts = configOptions.filter(o => selectedConfig.has(o.id) || o.is_locked);
+  const totalWeight = selectedOpts.reduce((sum, o) => sum + (o.weight_kg != null ? Number(o.weight_kg) : 0), 0);
+  const selectedCount = selectedOpts.length;
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
-      {Object.entries(grouped).sort(([a],[b]) => a.localeCompare(b)).map(([cat, opts]) => {
-        const single = singleCats.has(cat);
-        return (
-        <div key={cat} className="card">
-          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
-            {cat}
-            {single && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: 'var(--accent)', textTransform: 'none', letterSpacing: 0 }}>(choose one)</span>}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {opts.map(o => {
-              const checked = selectedConfig.has(o.id);
-              return (
-                <label
-                  key={o.id}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10, cursor: canEdit ? 'pointer' : 'default',
-                    padding: '7px 10px', borderRadius: 6,
-                    background: checked ? 'rgba(99,102,241,0.08)' : 'transparent',
-                    border: checked ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent',
-                    transition: 'all 0.12s',
-                  }}
-                >
-                  <input
-                    type={single ? 'radio' : 'checkbox'}
-                    name={single ? `cfg-cat-${cat}` : undefined}
-                    checked={checked}
-                    onChange={() => canEdit && onToggle(o.id)}
-                    disabled={!canEdit}
-                    style={{ width: 15, height: 15, flexShrink: 0 }}
-                  />
-                  <span style={{ fontSize: 13, fontWeight: checked ? 600 : 400 }}>{o.label}</span>
-                </label>
-              );
-            })}
-          </div>
+    <div>
+      {/* Summary bar */}
+      <div className="card" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 24, marginBottom: 16, padding: '12px 18px' }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{selectedCount}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>options fitted</div>
         </div>
-        );
-      })}
+        {totalWeight > 0 && (
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1 }}>+{totalWeight.toFixed(1)}<span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}> kg</span></div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>added weight</div>
+          </div>
+        )}
+        <div style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+          {canEdit ? 'Tap an option to add or remove it' : 'Read-only'}
+        </div>
+      </div>
+
+      {/* Category cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16, alignItems: 'start' }}>
+        {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([cat, opts]) => {
+          const single = singleCats.has(cat);
+          const chosen = opts.filter(o => selectedConfig.has(o.id) || o.is_locked).length;
+          return (
+            <div key={cat} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+                <span style={{ fontSize: 16 }}>{configCatIcon(cat)}</span>
+                <span style={{ fontWeight: 700, fontSize: 13.5 }}>{cat}</span>
+                {single && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', background: 'rgba(99,102,241,0.12)', borderRadius: 10, padding: '1px 8px' }}>CHOOSE ONE</span>}
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>{chosen}/{opts.length}</span>
+              </div>
+              <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {opts.map(o => {
+                  const checked = selectedConfig.has(o.id) || o.is_locked;
+                  const locked = !!o.is_locked;
+                  const disabled = !canEdit || locked;
+                  return (
+                    <label
+                      key={o.id}
+                      onClick={(e) => { if (disabled) return; e.preventDefault(); onToggle(o.id); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 11, cursor: disabled ? 'default' : 'pointer',
+                        padding: '9px 11px', borderRadius: 8,
+                        background: checked ? 'rgba(99,102,241,0.08)' : 'transparent',
+                        border: `1px solid ${checked ? 'rgba(99,102,241,0.35)' : 'var(--border)'}`,
+                        transition: 'background 0.12s, border-color 0.12s',
+                      }}
+                    >
+                      {/* Custom check indicator */}
+                      <span style={{
+                        width: 20, height: 20, flexShrink: 0, borderRadius: single ? '50%' : 6,
+                        border: `2px solid ${checked ? 'var(--accent)' : 'var(--border-strong, #cbd5e1)'}`,
+                        background: checked ? 'var(--accent)' : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: '#fff', fontSize: 12, fontWeight: 800,
+                      }}>{checked ? '✓' : ''}</span>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: checked ? 600 : 400 }}>
+                        {o.label}
+                        {!!o.is_standard && !locked && <span style={{ marginLeft: 7, fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px' }}>STANDARD</span>}
+                        {locked && <span style={{ marginLeft: 7, fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px' }}>🔒 INCLUDED</span>}
+                      </span>
+                      {o.weight_kg != null && Number(o.weight_kg) !== 0 && (
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                          {Number(o.weight_kg) > 0 ? '+' : ''}{Number(o.weight_kg).toFixed(1)} kg
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -727,6 +759,7 @@ function MaintenanceTab({
     try {
       const payload = {
         planned_arrival_date: plannedForm.planned_arrival_date,
+        planned_departure_date: plannedForm.planned_departure_date || null,
         assigned_technicians: plannedForm.assigned_technicians || null,
         planned_comments: plannedForm.planned_comments || null,
         work_order_number: plannedForm.work_order_number || null,
@@ -791,7 +824,17 @@ function MaintenanceTab({
                 <input
                   type="date"
                   value={plannedForm.planned_arrival_date}
+                  max="9999-12-31"
                   onChange={e => setPlannedForm(f => ({ ...f, planned_arrival_date: e.target.value }))}
+                />
+              </FormField>
+              <FormField label="Expected Leave / Done Date" half>
+                <input
+                  type="date"
+                  value={plannedForm.planned_departure_date || ''}
+                  min={plannedForm.planned_arrival_date || undefined}
+                  max="9999-12-31"
+                  onChange={e => setPlannedForm(f => ({ ...f, planned_departure_date: e.target.value }))}
                 />
               </FormField>
               <FormField label="Assigned Technician(s)" half>
@@ -974,6 +1017,7 @@ function MaintenanceTab({
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             Arrival: {fmtDate(pm.planned_arrival_date || pm.planned_date)}
+                            {pm.planned_departure_date && ` · Leave: ${fmtDate(pm.planned_departure_date)}`}
                             {(pm.assigned_technicians || pm.assigned_technician_name) && ` · ${pm.assigned_technicians || pm.assigned_technician_name}`}
                           </div>
                           {pm.items && pm.items.length > 0 && (
@@ -1009,32 +1053,50 @@ function MaintenanceTab({
                   Signed Off
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {completedPlannedItems.map(item => (
-                    <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-secondary)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{item.template_title}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            Completed {fmtDate(item.completed_date)} by {item.signed_off_by || '-'}
-                          </div>
-                          {item.signoff_notes && (
-                            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>{item.signoff_notes}</div>
-                          )}
-                          {item.additional_work && (
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-                              Extra work: {item.additional_work}
+                  {completedPlannedItems.map(job => {
+                    // One card per visit: combine all work items, technicians and hours.
+                    const workItems = (job.items && job.items.length) ? job.items : [{ template_title: job.template_title, signed_off_by: job.signed_off_by, labor_hours: job.labor_hours }];
+                    const signers = [...new Set(workItems.map(i => i.signed_off_by).filter(Boolean))];
+                    const totalHours = workItems.reduce((s, i) => s + (i.labor_hours != null ? Number(i.labor_hours) : 0), 0);
+                    const arrival = job.planned_arrival_date || job.planned_date;
+                    const dateLabel = job.planned_departure_date && String(job.planned_departure_date).slice(0, 10) !== String(arrival || '').slice(0, 10)
+                      ? `${fmtDate(arrival)} → ${fmtDate(job.planned_departure_date)}`
+                      : fmtDate(job.completed_date || arrival);
+                    return (
+                      <div key={job.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-secondary)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: workItems.length ? 10 : 0 }}>
+                          <div>
+                            <div style={{ fontWeight: 700 }}>
+                              {job.work_order_number ? `Work order ${job.work_order_number}` : 'Maintenance visit'}
                             </div>
-                          )}
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <span className="badge badge-success" style={{ fontSize: 10 }}>Completed</span>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-                            {item.labor_hours != null ? `${Number(item.labor_hours).toFixed(1)} h` : '-'}
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                              {dateLabel}{signers.length ? ` · ${signers.join(', ')}` : ''}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <span className="badge badge-success" style={{ fontSize: 10 }}>Completed</span>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+                              {totalHours > 0 ? `${totalHours.toFixed(1)} h total` : '-'}
+                            </div>
                           </div>
                         </div>
+                        {/* Work items breakdown */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {workItems.map((wi, wiIdx) => (
+                            <div key={wi.id || wiIdx} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, padding: '3px 0', borderTop: wiIdx ? '1px solid var(--border)' : 'none' }}>
+                              <span style={{ color: 'var(--success)', flexShrink: 0 }}>✓</span>
+                              <span style={{ flex: 1 }}>{wi.template_title || wi.title || 'Work item'}</span>
+                              {wi.signed_off_by && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{wi.signed_off_by}</span>}
+                              {wi.labor_hours != null && Number(wi.labor_hours) > 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{Number(wi.labor_hours).toFixed(1)}h</span>}
+                            </div>
+                          ))}
+                        </div>
+                        {job.signoff_notes && (
+                          <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', color: 'var(--text-secondary)' }}>{job.signoff_notes}</div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1260,7 +1322,11 @@ export default function FleetDetail() {
   const toast = useToast();
   const fileInputRef = useRef(null);
 
-  const [tab, setTab]         = useState('Overview');
+  const [searchParams] = useSearchParams();
+  const [tab, setTab]         = useState(() => {
+    const t = searchParams.get('tab');
+    return t && TABS.includes(t) ? t : 'Overview';
+  });
   const [aircraft, setAircraft] = useState(null);
   const [loading, setLoading] = useState(true);
   const [form, setForm]       = useState({});
@@ -1302,6 +1368,7 @@ export default function FleetDetail() {
   const [componentTypes, setComponentTypes] = useState([]);
   const [componentNames, setComponentNames] = useState([]); // { id, component_type, name }
   const [fleetSettings, setFleetSettings] = useState({});   // toe-in thresholds etc.
+  const buildStatuses = parseBuildStatuses(fleetSettings);
 
   // Contact modal
   const [cModal, setCModal] = useState(null);
@@ -1666,7 +1733,7 @@ export default function FleetDetail() {
     // Identity grid
     const info = [
       ['BW Serial', aircraft.bw_serial], ['Registration', aircraft.registration], ['Model', aircraft.model],
-      ['Build Status', (BUILD_STATUS_LABEL[aircraft.build_status] || aircraft.build_status)],
+      ['Build Status', buildStatusLabel(aircraft.build_status, buildStatuses)],
       ['Owner / Customer', aircraft.customer_name], ['Country', aircraft.country_name],
       ['First Flight', d(aircraft.first_flight_date)], ['Delivery', d(aircraft.delivery_date)],
       ['Airworthiness', aircraft.airworthiness_status], ['Airworthiness Expiry', d(aircraft.airworthiness_expiry)],
@@ -2015,8 +2082,8 @@ export default function FleetDetail() {
               {aircraft.aircraft_number && (
                 <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>/ {aircraft.aircraft_number}</span>
               )}
-              <span className={`badge ${BUILD_STATUS_BADGE[aircraft.build_status] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
-                {BUILD_STATUS_LABEL[aircraft.build_status] || aircraft.build_status}
+              <span className={`badge ${buildStatusBadge(aircraft.build_status)}`} style={{ fontSize: 10 }}>
+                {buildStatusLabel(aircraft.build_status, buildStatuses)}
               </span>
               {aircraft.financing_flag && (
                 <span className="badge badge-warning" style={{ fontSize: 10 }}>💳 Financing</span>
@@ -2117,7 +2184,7 @@ export default function FleetDetail() {
                   </FormField>
                   <FormField label="Build Status" half>
                     <select value={form.build_status} onChange={e => setF({ build_status: e.target.value })}>
-                      {Object.entries(BUILD_STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      {buildStatuses.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                   </FormField>
                 </div>
@@ -2141,7 +2208,7 @@ export default function FleetDetail() {
                 <InfoRow label="BW Serial" value={aircraft.bw_serial} />
                 <InfoRow label="Aircraft Number" value={aircraft.aircraft_number} />
                 <InfoRow label="Model" value={aircraft.model} />
-                <InfoRow label="Build Status" value={BUILD_STATUS_LABEL[aircraft.build_status]} />
+                <InfoRow label="Build Status" value={buildStatusLabel(aircraft.build_status, buildStatuses)} />
                 <InfoRow label="Owner / Customer" value={aircraft.customer_name} />
                 <InfoRow label="Registration" value={aircraft.registration} />
                 <InfoRow label="Country" value={

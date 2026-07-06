@@ -6,6 +6,7 @@ import {
   getFleetUpcomingServices,
   getFleetPlannedMaintenance,
   getMaintenanceRequests,
+  getDemos,
 } from '../api';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -24,6 +25,33 @@ function daysUntil(dateStr) {
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// Normalise a date value to a yyyy-mm-dd key.
+function dateKey(d) { return d ? String(d).slice(0, 10) : null; }
+
+// Every yyyy-mm-dd between start and end (inclusive). Falls back to [start] when
+// there is no end date, and caps the span so a bad range can't loop forever.
+function eachDayInclusive(start, end) {
+  const s = dateKey(start);
+  if (!s) return [];
+  const e = dateKey(end) || s;
+  const out = [];
+  const cur = new Date(s + 'T00:00:00');
+  const last = new Date((e < s ? s : e) + 'T00:00:00');
+  for (let i = 0; i < 400 && cur <= last; i++) {
+    out.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+// Human summary of all the work in a planned-maintenance job (not just the first item).
+function workSummary(p) {
+  const items = p.items || [];
+  const titles = items.map(it => it.template_title || it.title).filter(Boolean);
+  if (titles.length) return titles.join(' + ');
+  return p.template_title || p.planned_comments || 'Scheduled work';
+}
 
 function StatCard({ label, value, sub }) {
   return (
@@ -56,23 +84,26 @@ export default function Dashboard() {
   const [services, setServices] = useState([]);
   const [planned, setPlanned]   = useState([]);
   const [portalReqs, setPortalReqs] = useState([]);
+  const [demos, setDemos]       = useState([]);
   const [loading, setLoading]   = useState(true);
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
   useEffect(() => {
     (async () => {
-      const [sRes, fRes, svcRes, pmRes, mrRes] = await Promise.allSettled([
+      const [sRes, fRes, svcRes, pmRes, mrRes, dRes] = await Promise.allSettled([
         getDashboardStats(),
         getFleetList(),
         getFleetUpcomingServices(),
         getFleetPlannedMaintenance(),
         getMaintenanceRequests(),
+        getDemos(),
       ]);
       if (sRes.status === 'fulfilled')   setStats(sRes.value.data);
       if (fRes.status === 'fulfilled')   setFleet(fRes.value.data || []);
       if (svcRes.status === 'fulfilled') setServices(svcRes.value.data || []);
       if (pmRes.status === 'fulfilled')  setPlanned(pmRes.value.data || []);
       if (mrRes.status === 'fulfilled')  setPortalReqs(mrRes.value.data || []);
+      if (dRes.status === 'fulfilled')   setDemos(dRes.value.data || []);
       setLoading(false);
     })();
   }, []);
@@ -108,18 +139,42 @@ export default function Dashboard() {
       .sort((a, b) => a._days - b._days);
   }, [planned]);
 
-  // ── Calendar entries keyed by yyyy-mm-dd ──
+  // ── Calendar entries keyed by yyyy-mm-dd. Multi-day jobs and demos are marked
+  //    on every day of their span so the duration is visible at a glance. ──
   const calEntries = useMemo(() => {
     const map = {};
+    const push = (key, entry) => { (map[key] ||= []).push(entry); };
+
     for (const p of planned) {
-      const dateStr = p.planned_arrival_date || p.planned_date;
-      if (!dateStr) continue;
-      const key = String(dateStr).slice(0, 10);
-      if (!map[key]) map[key] = [];
-      map[key].push(p);
+      const start = dateKey(p.planned_arrival_date || p.planned_date);
+      if (!start) continue;
+      const end = dateKey(p.planned_departure_date) || start;
+      const days = eachDayInclusive(start, end);
+      days.forEach((day, i) => push(day, {
+        kind: 'maintenance',
+        id: `pm-${p.id}`,
+        aircraft_id: p.aircraft_id,
+        status: p.status,
+        label: `BW-${p.bw_serial}`,
+        title: `BW-${p.bw_serial} · ${workSummary(p)}`,
+        isStart: i === 0,
+        isEnd: i === days.length - 1,
+      }));
+    }
+
+    for (const d of demos) {
+      const days = eachDayInclusive(d.start_date, d.end_date);
+      days.forEach((day, i) => push(day, {
+        kind: 'demo',
+        id: `demo-${d.id}`,
+        label: d.title,
+        title: `${d.title}${d.aircraft ? ` · ${d.aircraft}` : ''}${d.location ? ` · ${d.location}` : ''}`,
+        isStart: i === 0,
+        isEnd: i === days.length - 1,
+      }));
     }
     return map;
-  }, [planned]);
+  }, [planned, demos]);
 
   const countries = stats?.aircraft_by_country || [];
 
@@ -241,28 +296,28 @@ export default function Dashboard() {
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: 120 }}>Arrival</th>
+                  <th style={{ width: 110 }}>Arrival</th>
+                  <th style={{ width: 100 }}>Leave</th>
                   <th style={{ width: 140 }}>Aircraft</th>
                   <th>Work</th>
-                  <th style={{ width: 150 }}>Technician</th>
-                  <th style={{ width: 150 }}>Customer</th>
+                  <th style={{ width: 140 }}>Technician</th>
+                  <th style={{ width: 140 }}>Customer</th>
                 </tr>
               </thead>
               <tbody>
                 {upcomingPlanned.map(p => (
-                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fleet/${p.aircraft_id}`)}>
+                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/fleet/${p.aircraft_id}?tab=Maintenance`)}>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {fmtDate(p.planned_arrival_date || p.planned_date)}
                       <div style={{ fontSize: 11, color: p._days <= 3 ? 'var(--danger)' : 'var(--text-muted)' }}>
                         {p._days === 0 ? 'Today' : p._days === 1 ? 'Tomorrow' : `in ${p._days} days`}
                       </div>
                     </td>
-                    <td><strong>BW-{p.bw_serial}</strong>{p.registration ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.registration}</div> : null}</td>
-                    <td style={{ fontSize: 13 }}>
-                      {p.items && p.items.length > 0
-                        ? `${p.items.length} item${p.items.length !== 1 ? 's' : ''}${p.template_title ? ` · ${p.template_title}` : ''}`
-                        : (p.template_title || p.planned_comments || '—')}
+                    <td style={{ whiteSpace: 'nowrap', fontSize: 13, color: p.planned_departure_date ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {p.planned_departure_date ? fmtDate(p.planned_departure_date) : '—'}
                     </td>
+                    <td><strong>BW-{p.bw_serial}</strong>{p.registration ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.registration}</div> : null}</td>
+                    <td style={{ fontSize: 13 }}>{workSummary(p)}</td>
                     <td style={{ fontSize: 13 }}>{p.assigned_technicians || p.assigned_technician_name || '–'}</td>
                     <td style={{ fontSize: 13 }}>{p.customer_name || '–'}</td>
                   </tr>
@@ -280,7 +335,7 @@ export default function Dashboard() {
         onPrev={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
         onNext={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
         onToday={() => { const d = new Date(); setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}
-        onChip={(aircraftId) => navigate(`/fleet/${aircraftId}`)}
+        onChip={(entry) => navigate(entry.kind === 'demo' ? '/demos' : `/fleet/${entry.aircraft_id}?tab=Maintenance`)}
       />
 
       {/* ── Aircraft by country ── */}
@@ -342,8 +397,9 @@ function MaintenanceCalendar({ month, entries, onPrev, onNext, onToday, onChip }
 
       {/* Legend */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--accent)' }} /> Planned</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--accent)' }} /> Maintenance</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: '#22c55e' }} /> Completed</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: '#d97706' }} /> Demo / away</span>
       </div>
 
       {/* Day-of-week header */}
@@ -371,20 +427,25 @@ function MaintenanceCalendar({ month, entries, onPrev, onNext, onToday, onChip }
               }}
             >
               <div style={{ fontSize: 11, fontWeight: isToday ? 800 : 600, color: isToday ? 'var(--accent)' : 'var(--text-muted)', textAlign: 'right', padding: '0 2px' }}>{day}</div>
-              {dayEntries.slice(0, 3).map(e => (
-                <div
-                  key={e.id}
-                  onClick={() => onChip(e.aircraft_id)}
-                  title={`BW-${e.bw_serial}${e.template_title ? ` · ${e.template_title}` : ''}${e.assigned_technician_name ? ` · ${e.assigned_technician_name}` : ''}`}
-                  style={{
-                    fontSize: 10, fontWeight: 600, color: '#fff', borderRadius: 3, padding: '2px 4px',
-                    background: e.status === 'completed' ? '#22c55e' : 'var(--accent)',
-                    cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}
-                >
-                  BW-{e.bw_serial}
-                </div>
-              ))}
+              {dayEntries.slice(0, 3).map((e, ei) => {
+                const bg = e.kind === 'demo' ? '#d97706' : (e.status === 'completed' ? '#22c55e' : 'var(--accent)');
+                // Continuation days (not the start) get square left corners so multi-day spans read as a bar.
+                const radius = `${e.isStart ? 3 : 0}px ${e.isEnd ? 3 : 0}px ${e.isEnd ? 3 : 0}px ${e.isStart ? 3 : 0}px`;
+                return (
+                  <div
+                    key={`${e.id}-${ei}`}
+                    onClick={() => onChip(e)}
+                    title={e.title}
+                    style={{
+                      fontSize: 10, fontWeight: 600, color: '#fff', borderRadius: radius, padding: '2px 4px',
+                      background: bg, opacity: e.isStart ? 1 : 0.82,
+                      cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {e.isStart ? e.label : '↳'}
+                  </div>
+                );
+              })}
               {dayEntries.length > 3 && (
                 <div style={{ fontSize: 9, color: 'var(--text-muted)', padding: '0 2px' }}>+{dayEntries.length - 3} more</div>
               )}

@@ -337,6 +337,7 @@ function emptyEditForm(item) {
     planned_arrival_date: item?.planned_arrival_date
       ? String(item.planned_arrival_date).slice(0, 10)
       : (item?.planned_date ? String(item.planned_date).slice(0, 10) : ''),
+    planned_departure_date: item?.planned_departure_date ? String(item.planned_departure_date).slice(0, 10) : '',
     assigned_technicians: item?.assigned_technicians || (item?.assigned_technician_name || ''),
     customer_id: item?.customer_id ? String(item.customer_id) : '',
     planned_comments: item?.planned_comments || '',
@@ -423,6 +424,25 @@ export default function PlannedMaintenance() {
   const plannedItems  = useMemo(() => items.filter(i => i.status === 'planned'),   [items]);
   const completedItems = useMemo(() => items.filter(i => i.status === 'completed'), [items]);
 
+  // Completed maintenance grouped by aircraft, so the list stays collapsed and fast:
+  // each aircraft's visits are only rendered when that aircraft is expanded.
+  const completedByAircraft = useMemo(() => {
+    const groups = new Map();
+    for (const pm of completedItems) {
+      if (!groups.has(pm.aircraft_id)) {
+        groups.set(pm.aircraft_id, { aircraft_id: pm.aircraft_id, bw_serial: pm.bw_serial, registration: pm.registration, jobs: [] });
+      }
+      groups.get(pm.aircraft_id).jobs.push(pm);
+    }
+    return [...groups.values()].sort((a, b) => String(a.bw_serial || '').localeCompare(String(b.bw_serial || ''), undefined, { numeric: true }));
+  }, [completedItems]);
+  const [expandedCompleted, setExpandedCompleted] = useState(() => new Set());
+  const toggleCompletedAircraft = (id) => setExpandedCompleted(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
   // ── Item-level sign-off ───────────────────────────────────────────────────
   async function handleItemSignoff(itemId, form) {
     try {
@@ -508,6 +528,7 @@ export default function PlannedMaintenance() {
     try {
       const payload = {
         planned_arrival_date: editForm.planned_arrival_date,
+        planned_departure_date: editForm.planned_departure_date || null,
         assigned_technicians: editForm.assigned_technicians || null,
         customer_id: editForm.customer_id || null,
         planned_comments: editForm.planned_comments || null,
@@ -888,6 +909,7 @@ ${pm.signoff_notes ? `
                           {/* Date + technician */}
                           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                             Arrival: <strong>{fmtDate(pm.planned_arrival_date || pm.planned_date)}</strong>
+                            {pm.planned_departure_date && <> · Leave: <strong>{fmtDate(pm.planned_departure_date)}</strong></>}
                             {(pm.assigned_technicians || pm.assigned_technician_name) && <> · Technician: <strong>{pm.assigned_technicians || pm.assigned_technician_name}</strong></>}
                           </div>
                           {/* Customer link */}
@@ -1065,7 +1087,17 @@ ${pm.signoff_notes ? `
                               <input
                                 type="date"
                                 value={editForm.planned_arrival_date}
+                                max="9999-12-31"
                                 onChange={e => setEditForm(f => ({ ...f, planned_arrival_date: e.target.value }))}
+                              />
+                            </LabeledField>
+                            <LabeledField label="Expected Leave / Done Date" style={{ flex: '1 1 180px' }}>
+                              <input
+                                type="date"
+                                value={editForm.planned_departure_date || ''}
+                                min={editForm.planned_arrival_date || undefined}
+                                max="9999-12-31"
+                                onChange={e => setEditForm(f => ({ ...f, planned_departure_date: e.target.value }))}
                               />
                             </LabeledField>
                             <LabeledField label="Work Order Number" style={{ flex: '1 1 180px' }}>
@@ -1233,15 +1265,30 @@ ${pm.signoff_notes ? `
             {!showCompleted ? null : completedItems.length === 0 ? (
               <p style={{ color: 'var(--text-muted)', margin: 0 }}>No maintenance has been signed off yet.</p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {completedItems.map(pm => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {completedByAircraft.map(group => {
+                  const acOpen = expandedCompleted.has(group.aircraft_id);
+                  return (
+                  <div key={group.aircraft_id} style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                    <div
+                      onClick={() => toggleCompletedAircraft(group.aircraft_id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', background: 'var(--bg-secondary)' }}
+                    >
+                      <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 14, display: 'inline-block' }}>{acOpen ? '▼' : '▶'}</span>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{group.bw_serial}</span>
+                      {group.registration && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{group.registration}</span>}
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{group.jobs.length} visit{group.jobs.length === 1 ? '' : 's'}</span>
+                    </div>
+                    {acOpen && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10, borderTop: '1px solid var(--border)' }}>
+                        {group.jobs.map(pm => {
                   const isEditingThis = editingCompletedId === pm.id;
                   return (
                     <div key={pm.id} style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
                       {/* Row */}
                       <div
                         style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start', padding: '12px 14px', cursor: 'pointer' }}
-                        onClick={() => navigate(`/fleet/${pm.aircraft_id}`)}
+                        onClick={() => navigate(`/fleet/${pm.aircraft_id}?tab=Maintenance`)}
                       >
                         {/* Aircraft */}
                         <div style={{ minWidth: 110, flexShrink: 0 }}>
@@ -1432,6 +1479,11 @@ ${pm.signoff_notes ? `
                         </div>
                       )}
                     </div>
+                  );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   );
                 })}
               </div>

@@ -1,32 +1,13 @@
 import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getFleetList, createFleetAircraft, getFleetModels } from '../api';
+import { getFleetList, createFleetAircraft, getFleetModels, getFleetSettings } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { parseBuildStatuses, buildStatusBadge, buildStatusLabel, DEFAULT_BUILD_STATUSES } from '../utils/buildStatus';
 
 // Key used to persist the scroll position of the Aircraft list across navigation.
 // Stored in sessionStorage so it survives back/forward but resets on a new tab.
 const SCROLL_KEY = 'fleet_list_scroll_y';
-
-const BUILD_STATUS_BADGE = {
-  in_production: 'badge-info',
-  completed: 'badge-success',
-  delivered: 'badge-success',
-  in_service: 'badge-success',
-  stored: 'badge-ghost',
-  for_sale: 'badge-warning',
-  written_off: 'badge-danger',
-};
-
-const BUILD_STATUS_LABEL = {
-  in_production: 'In Production',
-  completed: 'Completed',
-  delivered: 'Delivered',
-  in_service: 'In Service',
-  stored: 'Stored',
-  for_sale: 'For Sale',
-  written_off: 'Written Off',
-};
 
 function FlagIcon({ code }) {
   if (!code || code.length !== 2) return null;
@@ -70,6 +51,7 @@ export default function FleetList() {
   const [filter, setFilter] = useState('');
   const [sortDir, setSortDir] = useState('asc');
   const [models, setModels] = useState([]);
+  const [buildStatuses, setBuildStatuses] = useState(DEFAULT_BUILD_STATUSES);
 
   useEffect(() => {
     load();
@@ -78,9 +60,10 @@ export default function FleetList() {
   async function load() {
     setLoading(true);
     try {
-      const [listRes, modelRes] = await Promise.all([getFleetList(), getFleetModels()]);
+      const [listRes, modelRes, settingsRes] = await Promise.all([getFleetList(), getFleetModels(), getFleetSettings().catch(() => null)]);
       setAircraft(listRes.data);
       setModels((modelRes.data || []).map(item => item.name));
+      if (settingsRes) setBuildStatuses(parseBuildStatuses(settingsRes.data));
     } finally {
       setLoading(false);
     }
@@ -216,8 +199,8 @@ export default function FleetList() {
                     </td>
                     <td style={{ fontSize: 13 }}>{a.model}</td>
                     <td>
-                      <span className={`badge ${BUILD_STATUS_BADGE[a.build_status] || 'badge-ghost'}`} style={{ fontSize: 10 }}>
-                        {BUILD_STATUS_LABEL[a.build_status] || a.build_status}
+                      <span className={`badge ${buildStatusBadge(a.build_status)}`} style={{ fontSize: 10 }}>
+                        {buildStatusLabel(a.build_status, buildStatuses)}
                       </span>
                     </td>
                     <td style={{ textAlign: 'center' }}>
@@ -288,7 +271,7 @@ export default function FleetList() {
                 <div className="form-group">
                   <label>Build Status</label>
                   <select value={form.build_status} onChange={e => setF({ build_status: e.target.value })}>
-                    {Object.entries(BUILD_STATUS_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    {buildStatuses.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
               </div>

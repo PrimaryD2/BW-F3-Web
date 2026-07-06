@@ -17,6 +17,7 @@ import {
   getCustomers,
 } from '../api';
 import { useToast } from '../context/ToastContext';
+import { parseBuildStatuses, DEFAULT_BUILD_STATUSES } from '../utils/buildStatus';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
 const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings', 'Customer Portal'];
@@ -284,12 +285,44 @@ function SettingsSection() {
   const [form, setForm]     = useState({ toe_in_wheel_min: '', toe_in_wheel_max: '', toe_in_total_min: '', toe_in_total_max: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
+  const [statuses, setStatuses] = useState(DEFAULT_BUILD_STATUSES);
+  const [statusSaving, setStatusSaving] = useState(false);
 
   useEffect(() => {
     getAdminSettings()
-      .then(r => setForm(f => ({ ...f, ...r.data })))
+      .then(r => { setForm(f => ({ ...f, ...r.data })); setStatuses(parseBuildStatuses(r.data)); })
       .finally(() => setLoading(false));
   }, []);
+
+  const slug = (s) => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'status';
+  function setStatusLabel(i, label) {
+    setStatuses(list => list.map((s, idx) => idx === i ? { ...s, label, value: s._new ? slug(label) : s.value } : s));
+  }
+  function moveStatus(i, dir) {
+    setStatuses(list => {
+      const next = [...list]; const j = i + dir;
+      if (j < 0 || j >= next.length) return list;
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }
+  function removeStatus(i) { setStatuses(list => list.filter((_, idx) => idx !== i)); }
+  function addStatus() { setStatuses(list => [...list, { value: '', label: '', _new: true }]); }
+  async function saveStatuses() {
+    const clean = statuses
+      .map(s => ({ value: s.value || slug(s.label), label: String(s.label || '').trim() }))
+      .filter(s => s.label);
+    if (!clean.length) { toast.error('Add at least one build status'); return; }
+    const values = clean.map(s => s.value);
+    if (new Set(values).size !== values.length) { toast.error('Two statuses ended up with the same internal value — rename one'); return; }
+    setStatusSaving(true);
+    try {
+      const r = await updateAdminSettings({ build_statuses: JSON.stringify(clean) });
+      setStatuses(parseBuildStatuses(r.data));
+      toast.success('Build statuses saved');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setStatusSaving(false); }
+  }
 
   async function handleSave(e) {
     e.preventDefault();
@@ -336,6 +369,32 @@ function SettingsSection() {
           </div>
           <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Settings'}</button>
         </form>
+      </div>
+
+      {/* ── Build statuses ── */}
+      <div style={{ fontWeight: 700, fontSize: 15, marginTop: 28, marginBottom: 4 }}>Build Statuses</div>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+        The statuses available for each aircraft (shown as badges and in the Build Status dropdown). Rename, reorder, add, or remove them here.
+      </p>
+      <div className="card" style={{ maxWidth: 560 }}>
+        {statuses.map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <input
+              value={s.label}
+              placeholder="Status name"
+              onChange={e => setStatusLabel(i, e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', minWidth: 90 }}>{s.value || slug(s.label)}</span>
+            <button type="button" className="btn btn-ghost btn-sm" title="Move up" disabled={i === 0} onClick={() => moveStatus(i, -1)}>↑</button>
+            <button type="button" className="btn btn-ghost btn-sm" title="Move down" disabled={i === statuses.length - 1} onClick={() => moveStatus(i, 1)}>↓</button>
+            <button type="button" className="btn btn-ghost btn-sm" title="Remove" onClick={() => removeStatus(i)} style={{ color: 'var(--danger)' }}>✕</button>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button type="button" className="btn btn-ghost" onClick={addStatus}>+ Add status</button>
+          <button type="button" className="btn btn-primary" disabled={statusSaving} onClick={saveStatuses}>{statusSaving ? 'Saving…' : 'Save Build Statuses'}</button>
+        </div>
       </div>
     </div>
   );

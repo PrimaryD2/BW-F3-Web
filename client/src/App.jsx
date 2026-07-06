@@ -20,6 +20,7 @@ const FleetList          = lazy(() => import('./pages/FleetList'));
 const FleetDetail        = lazy(() => import('./pages/FleetDetail'));
 const AircraftGallery    = lazy(() => import('./pages/AircraftGallery'));
 const PlannedMaintenance = lazy(() => import('./pages/PlannedMaintenance'));
+const Demos              = lazy(() => import('./pages/Demos'));
 const CustomerList       = lazy(() => import('./pages/CustomerList'));
 const CustomerDetail     = lazy(() => import('./pages/CustomerDetail'));
 const Components         = lazy(() => import('./pages/Components'));
@@ -63,6 +64,7 @@ function AppRoutes() {
         <Route path="fleet/:id" element={<FleetDetail />} />
         <Route path="gallery" element={<AircraftGallery />} />
         <Route path="planned-maintenance" element={<PlannedMaintenance />} />
+        <Route path="demos" element={<Demos />} />
         <Route path="customers" element={<ProtectedRoute roles={['admin', 'supervisor', 'worker']}><CustomerList /></ProtectedRoute>} />
         <Route path="customers/:id" element={<ProtectedRoute roles={['admin', 'supervisor', 'worker']}><CustomerDetail /></ProtectedRoute>} />
         <Route path="components" element={<Components />} />

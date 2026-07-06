@@ -724,6 +724,33 @@ const ALTER_STMTS = [
      exact_serial VARCHAR(120) NULL,
      FOREIGN KEY (bulletin_id) REFERENCES fleet_bulletins(id) ON DELETE CASCADE
    )`,
+  // Planned maintenance: departure/leave date (end of the stay), so a job has a duration
+  `ALTER TABLE fleet_planned_maintenance ADD COLUMN IF NOT EXISTS planned_departure_date DATE NULL`,
+  // Service records: link back to the planned-maintenance job so the aircraft
+  // Maintenance tab can summarise a whole visit as one row instead of one-per-item.
+  `ALTER TABLE fleet_service_records ADD COLUMN IF NOT EXISTS planned_id INT NULL`,
+  // Settings values can now hold JSON lists (build statuses) — widen from VARCHAR(255).
+  `ALTER TABLE fleet_settings MODIFY COLUMN setting_value TEXT NULL`,
+  // Build statuses are now admin-editable, so the column must accept arbitrary
+  // values — convert the old ENUM to VARCHAR before remapping.
+  `ALTER TABLE fleet_aircraft MODIFY COLUMN build_status VARCHAR(50) NOT NULL DEFAULT 'in_production'`,
+  // Rename the old "in_service" to "maintenance".
+  `UPDATE fleet_aircraft SET build_status = 'maintenance' WHERE build_status = 'in_service'`,
+  // Seed the editable build-status list (JSON [{value,label}]) if not already set.
+  `INSERT IGNORE INTO fleet_settings (setting_key, setting_value) VALUES
+     ('build_statuses', '[{"value":"in_production","label":"In Production"},{"value":"completed","label":"Completed"},{"value":"delivered","label":"Delivered"},{"value":"maintenance","label":"Maintenance"},{"value":"stored","label":"Stored"},{"value":"for_sale","label":"For Sale"},{"value":"written_off","label":"Written Off"}]')`,
+  // Demos / "aircraft away" schedule — shown as multi-day blocks on the dashboard calendar
+  `CREATE TABLE IF NOT EXISTS fleet_demos (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     title VARCHAR(200) NOT NULL,
+     aircraft VARCHAR(200) NULL,
+     location VARCHAR(200) NULL,
+     start_date DATE NOT NULL,
+     end_date DATE NOT NULL,
+     notes TEXT NULL,
+     created_by INT NULL,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   )`,
 ];
 
 async function migrate() {

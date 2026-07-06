@@ -138,6 +138,12 @@ export const signOffFleetPlannedMaintenance = (pid, d) => api.post(`/fleet/plann
 export const editCompletedFleetPlannedMaintenance = (pid, d) => api.patch(`/fleet/planned-maintenance/${pid}`, d);
 export const unlockFleetPlannedMaintenance = (pid) => api.post(`/fleet/planned-maintenance/${pid}/unlock`);
 
+// ─── Demos / "aircraft away" schedule ──
+export const getDemos   = ()      => api.get('/demos');
+export const createDemo = (d)     => api.post('/demos', d);
+export const updateDemo = (id, d) => api.put(`/demos/${id}`, d);
+export const deleteDemo = (id)    => api.delete(`/demos/${id}`);
+
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
 export const deleteFleetContact = (id, cid)     => api.delete(`/fleet/${id}/contacts/${cid}`);

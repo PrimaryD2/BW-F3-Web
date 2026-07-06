@@ -14,7 +14,7 @@ const STAGES = [
   { key: 'F5',    short: 'F5', desc: 'Test flights & Finishing' },
   { key: 'READY', short: '🛩', desc: 'Aircraft Ready For Delivery' },
 ];
-const DONE_STATUSES = new Set(['completed', 'delivered', 'in_service']);
+const DONE_STATUSES = new Set(['completed', 'delivered', 'in_service', 'maintenance']);
 const BULLETIN_LABELS = { mandatory: 'Mandatory', obligatory: 'Obligatory', recommended: 'Recommended', optional: 'Optional' };
 
 function fmtDate(d) {

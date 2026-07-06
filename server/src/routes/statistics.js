@@ -157,7 +157,7 @@ router.get('/dashboard', async (req, res) => {
         `SELECT
            COUNT(*) AS total_aircraft_produced,
            SUM(CASE WHEN delivery_date IS NOT NULL OR build_status = 'delivered' THEN 1 ELSE 0 END) AS delivered_aircraft,
-           SUM(CASE WHEN build_status IN ('in_service', 'delivered') THEN 1 ELSE 0 END) AS active_in_service_aircraft
+           SUM(CASE WHEN build_status IN ('maintenance', 'in_service', 'delivered') THEN 1 ELSE 0 END) AS active_in_service_aircraft
          FROM fleet_aircraft`
       ),
       query(
