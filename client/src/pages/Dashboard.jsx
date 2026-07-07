@@ -26,8 +26,23 @@ function daysUntil(dateStr) {
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-// Normalise a date value to a yyyy-mm-dd key.
-function dateKey(d) { return d ? String(d).slice(0, 10) : null; }
+// Normalise a date value to a LOCAL yyyy-mm-dd key. A plain 'yyyy-mm-dd' is used
+// as-is; a full ISO timestamp (Date objects come back from the API serialized to
+// UTC) is parsed and converted to the local calendar day so it lands on the same
+// square the rest of the UI shows it on.
+function dateKey(d) {
+  if (!d) return null;
+  const s = String(d);
+  if (s.length === 10) return s;
+  const dt = new Date(s);
+  return isNaN(dt.getTime()) ? s.slice(0, 10) : localKey(dt);
+}
+
+// Format a Date using its LOCAL calendar day (never toISOString, which shifts to
+// UTC and lands on the previous day in positive-offset timezones like Sweden).
+function localKey(dt) {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
 
 // Every yyyy-mm-dd between start and end (inclusive). Falls back to [start] when
 // there is no end date, and caps the span so a bad range can't loop forever.
@@ -39,7 +54,7 @@ function eachDayInclusive(start, end) {
   const cur = new Date(s + 'T00:00:00');
   const last = new Date((e < s ? s : e) + 'T00:00:00');
   for (let i = 0; i < 400 && cur <= last; i++) {
-    out.push(cur.toISOString().slice(0, 10));
+    out.push(localKey(cur));
     cur.setDate(cur.getDate() + 1);
   }
   return out;
@@ -366,7 +381,7 @@ export default function Dashboard() {
 function MaintenanceCalendar({ month, entries, onPrev, onNext, onToday, onChip }) {
   const year = month.getFullYear();
   const mon = month.getMonth();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localKey(new Date());
 
   // Build a grid starting on Monday
   const firstDay = new Date(year, mon, 1);
@@ -442,7 +457,7 @@ function MaintenanceCalendar({ month, entries, onPrev, onNext, onToday, onChip }
                       cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                     }}
                   >
-                    {e.isStart ? e.label : '↳'}
+                    {e.label}
                   </div>
                 );
               })}
