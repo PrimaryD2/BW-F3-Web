@@ -2874,7 +2874,58 @@ function ComponentTypesSection() {
 }
 
 // ─── Component Names Section ──────────────────────────────────────────────────
-const EMPTY_CN = { component_type: '', name: '', sort_order: 0 };
+const EMPTY_CN = { component_type: '', name: '', sort_order: 0, is_limited_life: false, tbo_hours: '', lifespan_years: '', lifespan_basis: 'manufacturing', life_action: 'retire' };
+
+// Short human summary of a component name's limited-life rule.
+function limitedLifeSummary(n) {
+  if (!n || !Number(n.is_limited_life)) return null;
+  const bits = [];
+  if (n.tbo_hours != null && n.tbo_hours !== '') bits.push(`${Number(n.tbo_hours).toFixed(0)} h`);
+  if (n.lifespan_years != null && n.lifespan_years !== '') bits.push(`${Number(n.lifespan_years)} yr (${n.lifespan_basis === 'install' ? 'install' : 'mfg'})`);
+  const action = n.life_action === 'overhaul' ? 'Overhaul' : 'Retire';
+  return `${action}: ${bits.length ? bits.join(' or ') : 'limited life'}`;
+}
+
+function LimitedLifeFields({ form, setForm, compact }) {
+  const on = !!form.is_limited_life;
+  return (
+    <div style={{ marginTop: compact ? 8 : 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-secondary)' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+        <input type="checkbox" checked={on} onChange={e => setForm(f => ({ ...f, is_limited_life: e.target.checked }))} />
+        ⏳ Limited life item
+      </label>
+      {on && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, alignItems: 'flex-end' }}>
+          <div className="form-group" style={{ flex: '0 0 140px', margin: 0 }}>
+            <label>Action required</label>
+            <select value={form.life_action || 'retire'} onChange={e => setForm(f => ({ ...f, life_action: e.target.value }))}>
+              <option value="retire">Retire (replace)</option>
+              <option value="overhaul">Overhaul</option>
+            </select>
+          </div>
+          <div className="form-group" style={{ flex: '0 0 130px', margin: 0 }}>
+            <label>TBO hours</label>
+            <input type="number" min="0" step="1" value={form.tbo_hours} onChange={e => setForm(f => ({ ...f, tbo_hours: e.target.value }))} placeholder="e.g. 2000" />
+          </div>
+          <div className="form-group" style={{ flex: '0 0 130px', margin: 0 }}>
+            <label>Lifespan (years)</label>
+            <input type="number" min="0" step="0.5" value={form.lifespan_years} onChange={e => setForm(f => ({ ...f, lifespan_years: e.target.value }))} placeholder="e.g. 12" />
+          </div>
+          <div className="form-group" style={{ flex: '0 0 180px', margin: 0 }}>
+            <label>Years counted from</label>
+            <select value={form.lifespan_basis || 'manufacturing'} onChange={e => setForm(f => ({ ...f, lifespan_basis: e.target.value }))}>
+              <option value="manufacturing">Manufacturing date</option>
+              <option value="install">Installed-on-aircraft date</option>
+            </select>
+          </div>
+          <div style={{ flex: '1 1 100%', fontSize: 11, color: 'var(--text-muted)' }}>
+            Enter TBO hours and/or a lifespan in years — whichever is reached first triggers the {form.life_action === 'overhaul' ? 'overhaul' : 'retirement'}. The chosen date becomes required when adding this component.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ComponentNamesSection() {
   const toast = useToast();
@@ -2964,6 +3015,7 @@ function ComponentNamesSection() {
               <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '…' : '+ Add'}</button>
             </div>
           </div>
+          <LimitedLifeFields form={addForm} setForm={setAddForm} />
         </form>
       </div>
 
@@ -2991,6 +3043,7 @@ function ComponentNamesSection() {
                 <tr>
                   <th style={{ width: 140 }}>Type</th>
                   <th>Name</th>
+                  <th style={{ width: 240 }}>Limited Life</th>
                   <th style={{ width: 70 }}>Order</th>
                   <th style={{ width: 110 }}></th>
                 </tr>
@@ -3012,6 +3065,13 @@ function ComponentNamesSection() {
                     </td>
                     <td>
                       {editId === n.id
+                        ? <LimitedLifeFields form={editForm} setForm={setEditForm} compact />
+                        : (limitedLifeSummary(n)
+                            ? <span className="badge badge-warning" style={{ fontSize: 10 }}>⏳ {limitedLifeSummary(n)}</span>
+                            : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>)}
+                    </td>
+                    <td>
+                      {editId === n.id
                         ? <input type="number" value={editForm.sort_order} onChange={e => setEditForm(f => ({ ...f, sort_order: Number(e.target.value) }))} style={{ fontSize: 13, width: 60 }} />
                         : <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{n.sort_order}</span>}
                     </td>
@@ -3022,7 +3082,7 @@ function ComponentNamesSection() {
                             <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
                           </div>
                         : <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(n.id); setEditForm({ component_type: n.component_type, name: n.name, sort_order: n.sort_order }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(n.id); setEditForm({ component_type: n.component_type, name: n.name, sort_order: n.sort_order, is_limited_life: !!Number(n.is_limited_life), tbo_hours: n.tbo_hours ?? '', lifespan_years: n.lifespan_years ?? '', lifespan_basis: n.lifespan_basis || 'manufacturing', life_action: n.life_action || 'retire' }); }}>✎</button>
                             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(n.id)}>✕</button>
                           </div>}
                     </td>

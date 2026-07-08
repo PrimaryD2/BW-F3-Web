@@ -2,6 +2,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getFleetComponents, getFleetComponentTypes } from '../api';
 
+function fmtD(d) { return d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-GB') : null; }
+
 const SORT_FIELDS = [
   { value: 'component_name', label: 'Component Name' },
   { value: 'component_type', label: 'Type' },
@@ -207,8 +209,10 @@ export default function Components() {
                   <SortHeader field="component_name">Component</SortHeader>
                   <SortHeader field="serial_number" style={{ width: 150 }}>Serial #</SortHeader>
                   <SortHeader field="software_version" style={{ width: 130 }}>SW / Version</SortHeader>
-                  <SortHeader field="date_installed" style={{ width: 110 }}>Installed</SortHeader>
-                  <SortHeader field="expiry_date" style={{ width: 110 }}>Expiry</SortHeader>
+                  <SortHeader field="date_installed" style={{ width: 100 }}>Installed</SortHeader>
+                  <SortHeader field="manufacturing_date" style={{ width: 100 }}>Manufactured</SortHeader>
+                  <SortHeader field="repack_date" style={{ width: 100 }}>Repack/Test</SortHeader>
+                  <SortHeader field="expiry_date" style={{ width: 100 }}>Expiry</SortHeader>
                   <th style={{ width: 80 }}>Status</th>
                 </tr>
               </thead>
@@ -218,7 +222,7 @@ export default function Components() {
                   return (<React.Fragment key={r.id}>
                   {showGroupHeader && (
                     <tr>
-                      <td colSpan={8} style={{ background: 'var(--bg-hover)', fontWeight: 700, fontSize: 12, padding: '6px 12px', borderTop: idx === 0 ? 'none' : '2px solid var(--border)' }}>
+                      <td colSpan={10} style={{ background: 'var(--bg-hover)', fontWeight: 700, fontSize: 12, padding: '6px 12px', borderTop: idx === 0 ? 'none' : '2px solid var(--border)' }}>
                         BW-{r.bw_serial}{r.registration ? ` · ${r.registration}` : ''}
                       </td>
                     </tr>
@@ -261,9 +265,13 @@ export default function Components() {
                       {r.software_version || <span style={{ color: 'var(--text-muted)' }}>—</span>}
                     </td>
                     <td style={{ fontSize: 12 }}>
-                      {r.date_installed
-                        ? new Date(r.date_installed).toLocaleDateString()
-                        : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      {fmtD(r.date_installed) || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {fmtD(r.manufacturing_date) || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {fmtD(r.repack_date) || <span style={{ color: 'var(--text-muted)' }}>—</span>}
                     </td>
                     <td style={{ fontSize: 12 }}>
                       {r.expiry_date ? (

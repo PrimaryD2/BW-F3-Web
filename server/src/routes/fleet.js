@@ -183,9 +183,11 @@ router.get('/components', async (req, res) => {
   try {
     const { type, search } = req.query;
     let q = `
-      SELECT fsn.*, fa.bw_serial, fa.registration, fa.model, fa.build_status
+      SELECT fsn.*, fa.bw_serial, fa.registration, fa.model, fa.build_status,
+             cn.is_limited_life, cn.tbo_hours, cn.lifespan_years, cn.lifespan_basis, cn.life_action
       FROM fleet_serial_numbers fsn
       JOIN fleet_aircraft fa ON fa.id = fsn.aircraft_id
+      LEFT JOIN fleet_component_names cn ON cn.component_type = fsn.component_type AND cn.name = fsn.component_name
       WHERE 1=1`;
     const params = [];
     if (type) { q += ' AND fsn.component_type = ?'; params.push(type); }
@@ -1392,6 +1394,81 @@ router.delete('/:id/services/:rid', requireRole('admin', 'supervisor'), async (r
     await query('DELETE FROM fleet_service_records WHERE id=? AND aircraft_id=?', [req.params.rid, req.params.id]);
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// ─── Flight-hours log ────────────────────────────────────────────────────────
+// After any change, sync the aircraft's total_hours_tsn to the most recent
+// (by date, then id) reading so the rest of the app stays consistent.
+async function syncTsnFromLog(aircraftId) {
+  const rows = await query(
+    'SELECT total_hours, engine_hours FROM fleet_hours_log WHERE aircraft_id = ? ORDER BY log_date DESC, id DESC LIMIT 1',
+    [aircraftId]
+  );
+  if (rows.length) {
+    if (rows[0].engine_hours != null) {
+      await query('UPDATE fleet_aircraft SET total_hours_tsn = ?, engine_hours = ? WHERE id = ?', [rows[0].total_hours, rows[0].engine_hours, aircraftId]);
+    } else {
+      await query('UPDATE fleet_aircraft SET total_hours_tsn = ? WHERE id = ?', [rows[0].total_hours, aircraftId]);
+    }
+  }
+}
+
+// GET /api/fleet/:id/hours-log
+router.get('/:id/hours-log', async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT hl.*, u.name AS logged_by_name FROM fleet_hours_log hl
+       LEFT JOIN users u ON u.id = hl.logged_by
+       WHERE hl.aircraft_id = ? ORDER BY hl.log_date ASC, hl.id ASC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) { console.error('GET hours-log error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// POST /api/fleet/:id/hours-log
+router.post('/:id/hours-log', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { log_date, total_hours, engine_hours, note } = req.body || {};
+  const hrs = parseFloat(total_hours);
+  const eng = (engine_hours === '' || engine_hours == null || isNaN(parseFloat(engine_hours))) ? null : parseFloat(engine_hours);
+  if (!log_date) return res.status(400).json({ error: 'A date is required' });
+  if (isNaN(hrs) || hrs < 0) return res.status(400).json({ error: 'Valid total hours are required' });
+  try {
+    const r = await query(
+      'INSERT INTO fleet_hours_log (aircraft_id, log_date, total_hours, engine_hours, note, logged_by) VALUES (?,?,?,?,?,?)',
+      [req.params.id, toDateOnly(log_date), hrs, eng, String(note || '').trim() || null, req.user.id]
+    );
+    await syncTsnFromLog(req.params.id);
+    const rows = await query('SELECT hl.*, u.name AS logged_by_name FROM fleet_hours_log hl LEFT JOIN users u ON u.id = hl.logged_by WHERE hl.id = ?', [r.insertId]);
+    res.status(201).json(rows[0]);
+  } catch (err) { console.error('POST hours-log error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// PUT /api/fleet/:id/hours-log/:logId
+router.put('/:id/hours-log/:logId', requireRole('admin', 'supervisor'), async (req, res) => {
+  const { log_date, total_hours, engine_hours, note } = req.body || {};
+  const hrs = parseFloat(total_hours);
+  const eng = (engine_hours === '' || engine_hours == null || isNaN(parseFloat(engine_hours))) ? null : parseFloat(engine_hours);
+  if (!log_date) return res.status(400).json({ error: 'A date is required' });
+  if (isNaN(hrs) || hrs < 0) return res.status(400).json({ error: 'Valid total hours are required' });
+  try {
+    await query(
+      'UPDATE fleet_hours_log SET log_date=?, total_hours=?, engine_hours=?, note=? WHERE id=? AND aircraft_id=?',
+      [toDateOnly(log_date), hrs, eng, String(note || '').trim() || null, req.params.logId, req.params.id]
+    );
+    await syncTsnFromLog(req.params.id);
+    const rows = await query('SELECT hl.*, u.name AS logged_by_name FROM fleet_hours_log hl LEFT JOIN users u ON u.id = hl.logged_by WHERE hl.id = ?', [req.params.logId]);
+    res.json(rows[0] || { ok: true });
+  } catch (err) { console.error('PUT hours-log error:', err); res.status(500).json({ error: 'Server error' }); }
+});
+
+// DELETE /api/fleet/:id/hours-log/:logId
+router.delete('/:id/hours-log/:logId', requireRole('admin', 'supervisor'), async (req, res) => {
+  try {
+    await query('DELETE FROM fleet_hours_log WHERE id=? AND aircraft_id=?', [req.params.logId, req.params.id]);
+    await syncTsnFromLog(req.params.id);
+    res.json({ ok: true });
+  } catch (err) { console.error('DELETE hours-log error:', err); res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── Contacts ────────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {
   getFleetComponentTypes,
   getFleetComponentNames,
   getFleetSettings,
+  getFleetHoursLog, addFleetHoursLog, updateFleetHoursLog, deleteFleetHoursLog,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -133,6 +134,23 @@ function calcCG(nose, left, right) {
     cgPct:       cgPct.toFixed(1),
     ok:          cgPct >= 15 && cgPct <= 20,
   };
+}
+
+// Governor and propeller store their real serials across several extra_data fields
+// (multiple parts in one component) rather than the main Serial Number box.
+function componentExtraSerials(s) {
+  const ex = (s.extra_data && typeof s.extra_data === 'object') ? s.extra_data : {};
+  const parts = [];
+  const add = (label, val) => { if (val != null && String(val).trim() !== '') parts.push(`${label}: ${val}`); };
+  if (/propeller|prop/i.test(s.component_type || '')) {
+    add('Blade 1', ex.blade1); add('Blade 2', ex.blade2); add('Blade 3', ex.blade3);
+    add('Hub', ex.hub); add('Spinner', ex.spinner); add('Plate', ex.plate); add('Weights', ex.weights);
+  }
+  if (/governor/i.test(s.component_type || '')) {
+    add('Gov. Plate S/N', ex.gov_plate); add('Gov. Solenoid S/N', ex.gov_solenoid);
+    add('Plate Hole Size', ex.gov_hole_size ? `${ex.gov_hole_size} mm` : '');
+  }
+  return parts.join(' | ');
 }
 
 function CGTable({ cg }) {
@@ -423,6 +441,241 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle, singleSel
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Flight-hours log + trend graph ──────────────────────────────────────────
+function hlDate(d) {
+  if (!d) return '';
+  return new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+const hlByDate = (a, b) => String(a.log_date).localeCompare(String(b.log_date)) || (a.id - b.id);
+
+function HoursChart({ entries }) {
+  if (!entries || entries.length < 2) {
+    return <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '20px 0', textAlign: 'center' }}>Add at least two readings to see the trend.</div>;
+  }
+  const W = 620, H = 220, padL = 48, padR = 14, padT = 14, padB = 30;
+  const times = entries.map(e => new Date(String(e.log_date).slice(0, 10) + 'T00:00:00').getTime());
+  const hrs = entries.map(e => Number(e.total_hours));
+  const tMin = Math.min(...times), tMax = Math.max(...times);
+  const hMin = Math.min(...hrs), hMax = Math.max(...hrs);
+  const tSpan = (tMax - tMin) || 1, hSpan = (hMax - hMin) || 1;
+  const x = t => padL + (t - tMin) / tSpan * (W - padL - padR);
+  const y = h => padT + (1 - (h - hMin) / hSpan) * (H - padT - padB);
+  const pts = entries.map((e, i) => [x(times[i]), y(hrs[i])]);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  const yTicks = [hMin, (hMin + hMax) / 2, hMax];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} preserveAspectRatio="xMidYMid meet">
+      {yTicks.map((h, i) => (
+        <g key={i}>
+          <line x1={padL} x2={W - padR} y1={y(h)} y2={y(h)} stroke="var(--border)" strokeWidth="1" />
+          <text x={padL - 6} y={y(h) + 3} textAnchor="end" fontSize="10" fill="var(--text-muted)">{h.toFixed(0)}h</text>
+        </g>
+      ))}
+      <text x={padL} y={H - 8} textAnchor="start" fontSize="10" fill="var(--text-muted)">{hlDate(entries[0].log_date)}</text>
+      <text x={W - padR} y={H - 8} textAnchor="end" fontSize="10" fill="var(--text-muted)">{hlDate(entries[entries.length - 1].log_date)}</text>
+      <path d={line} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {pts.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r="3" fill="var(--accent)">
+          <title>{`${hlDate(entries[i].log_date)} — ${Number(entries[i].total_hours).toFixed(1)} h`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+function HoursLogSection({ aircraftId, canEdit, currentTsn, currentEngine, onSync, toast }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    total_hours: currentTsn != null ? String(currentTsn) : '',
+    engine_hours: currentEngine != null ? String(currentEngine) : '',
+    log_date: new Date().toISOString().slice(0, 10),
+    note: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try { const r = await getFleetHoursLog(aircraftId); if (alive) setEntries((r.data || []).slice().sort(hlByDate)); }
+      catch { /* ignore */ }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [aircraftId]);
+
+  function syncLatest(list) {
+    if (list.length && onSync) onSync(list[list.length - 1]);
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    if (form.total_hours === '' || isNaN(parseFloat(form.total_hours))) { toast.error('Enter the total hours'); return; }
+    if (!form.log_date) { toast.error('Enter a date'); return; }
+    setSaving(true);
+    try {
+      const r = await addFleetHoursLog(aircraftId, form);
+      const next = [...entries, r.data].sort(hlByDate);
+      setEntries(next); syncLatest(next);
+      // Keep the hours values (now current) but reset the date to today and clear the note.
+      setForm(f => ({ ...f, log_date: new Date().toISOString().slice(0, 10), note: '' }));
+      toast.success('Hours updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to log hours'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleSaveEdit(id) {
+    setSaving(true);
+    try {
+      const r = await updateFleetHoursLog(aircraftId, id, editForm);
+      const next = entries.map(x => x.id === id ? r.data : x).sort(hlByDate);
+      setEntries(next); syncLatest(next); setEditId(null);
+      toast.success('Updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this hours entry?')) return;
+    try {
+      await deleteFleetHoursLog(aircraftId, id);
+      const next = entries.filter(x => x.id !== id);
+      setEntries(next); syncLatest(next);
+      toast.success('Deleted');
+    } catch { toast.error('Failed to delete'); }
+  }
+
+  // ── Stats ──
+  const sorted = entries;
+  const latest = sorted.length ? sorted[sorted.length - 1] : null;
+  const totalTime = latest ? Number(latest.total_hours) : (currentTsn != null ? Number(currentTsn) : null);
+  const engineTime = (latest && latest.engine_hours != null) ? Number(latest.engine_hours) : (currentEngine != null ? Number(currentEngine) : null);
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  let hoursThisYear = null;
+  if (latest) {
+    const baseline = [...sorted].reverse().find(e => String(e.log_date).slice(0, 10) < yearStart) || sorted[0];
+    hoursThisYear = Math.max(0, Number(latest.total_hours) - Number(baseline.total_hours));
+  }
+  const Stat = ({ value, label }) => (
+    <div style={{ minWidth: 110 }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)', lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <div style={{ fontWeight: 700 }}>Flight Hours</div>
+        <button type="button" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowHistory(true)}>
+          📖 History Log{sorted.length ? ` (${sorted.length})` : ''}
+        </button>
+      </div>
+
+      {/* Current values */}
+      <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 16 }}>
+        <Stat value={totalTime != null ? `${totalTime.toFixed(1)} h` : '—'} label="Total time (TSN)" />
+        <Stat value={engineTime != null ? `${engineTime.toFixed(1)} h` : '—'} label="Engine hours" />
+      </div>
+
+      {/* Old-style entry — now dated and logged */}
+      {canEdit && (
+        <form onSubmit={handleAdd} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+            <label>Total hours (TSN)</label>
+            <input type="number" step="0.1" min="0" value={form.total_hours} onChange={e => setForm(f => ({ ...f, total_hours: e.target.value }))} placeholder="0.0" />
+          </div>
+          <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+            <label>Engine hours</label>
+            <input type="number" step="0.1" min="0" value={form.engine_hours} onChange={e => setForm(f => ({ ...f, engine_hours: e.target.value }))} placeholder="0.0" />
+          </div>
+          <div className="form-group" style={{ flex: '1 1 140px', margin: 0 }}>
+            <label>Date of reading</label>
+            <input type="date" max="9999-12-31" value={form.log_date} onChange={e => setForm(f => ({ ...f, log_date: e.target.value }))} />
+          </div>
+          <div className="form-group" style={{ flex: '1 1 100%', margin: 0 }}>
+            <label>Note (optional)</label>
+            <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} placeholder="e.g. after ferry flight" />
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? '…' : 'Update hours'}</button>
+        </form>
+      )}
+
+      {/* History modal — full log + trend graph */}
+      {showHistory && (
+        <div className="modal-overlay" onClick={() => { setShowHistory(false); setEditId(null); }}>
+          <div className="modal" style={{ maxWidth: 1000, width: '94vw' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Flight Hours — History Log</div>
+            {/* Stats inside the log */}
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginBottom: 16 }}>
+              <Stat value={totalTime != null ? `${totalTime.toFixed(1)} h` : '—'} label="Total time (TSN)" />
+              <Stat value={engineTime != null ? `${engineTime.toFixed(1)} h` : '—'} label="Engine hours" />
+              <Stat value={hoursThisYear != null ? `${hoursThisYear.toFixed(1)} h` : '—'} label={`Flown in ${year}`} />
+              <Stat value={sorted.length} label="Readings logged" />
+            </div>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div style={{ flex: '1 1 420px', minWidth: 320 }}>
+                {loading ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+                ) : sorted.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hours logged yet.</div>
+                ) : (
+                  <div style={{ maxHeight: 460, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                    {[...sorted].reverse().map((en, idx, arr) => {
+                      const prev = arr[idx + 1];
+                      const delta = prev ? Number(en.total_hours) - Number(prev.total_hours) : null;
+                      const isEd = editId === en.id;
+                      return (
+                        <div key={en.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: 14, flexWrap: 'wrap' }}>
+                          {isEd ? (
+                            <>
+                              <input type="number" step="0.1" value={editForm.total_hours} onChange={e => setEditForm(f => ({ ...f, total_hours: e.target.value }))} style={{ width: 90 }} title="Total (TSN)" />
+                              <input type="number" step="0.1" value={editForm.engine_hours} onChange={e => setEditForm(f => ({ ...f, engine_hours: e.target.value }))} style={{ width: 90 }} title="Engine" placeholder="Eng" />
+                              <input type="date" max="9999-12-31" value={editForm.log_date} onChange={e => setEditForm(f => ({ ...f, log_date: e.target.value }))} style={{ width: 150 }} />
+                              <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => handleSaveEdit(en.id)}>✓</button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
+                            </>
+                          ) : (
+                            <>
+                              <span style={{ fontWeight: 700, fontFamily: 'monospace', minWidth: 70 }}>{Number(en.total_hours).toFixed(1)}h</span>
+                              <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', minWidth: 78 }}>{en.engine_hours != null ? `${Number(en.engine_hours).toFixed(1)}h eng` : '—'}</span>
+                              <span style={{ color: 'var(--text-secondary)', minWidth: 100 }}>{hlDate(en.log_date)}</span>
+                              {delta != null && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>+{delta.toFixed(1)}</span>}
+                              {en.note && <span style={{ fontSize: 13, color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{en.note}</span>}
+                              {canEdit && (
+                                <span style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+                                  <button className="btn btn-ghost btn-sm" title="Edit" onClick={() => { setEditId(en.id); setEditForm({ total_hours: String(en.total_hours), engine_hours: en.engine_hours != null ? String(en.engine_hours) : '', log_date: String(en.log_date).slice(0, 10), note: en.note || '' }); }}>✎</button>
+                                  <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} title="Delete" onClick={() => handleDelete(en.id)}>✕</button>
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: '1 1 420px', minWidth: 340 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 6 }}>Hours trend</div>
+                <HoursChart entries={sorted} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button className="btn btn-ghost" onClick={() => { setShowHistory(false); setEditId(null); }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -795,9 +1048,7 @@ function MaintenanceTab({
   if (serviceTemplates.length === 0) {
     return (
       <>
-        {/* Hours section still shown at top */}
-        <HoursSummary aircraft={aircraft} form={form} canEdit={canEdit} setF={setF} />
-        <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)', marginTop: 20 }}>
+        <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>🔧</div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>No service templates defined</div>
           <p style={{ fontSize: 13 }}>Go to <strong>Admin - Service Templates</strong> to add service intervals.</p>
@@ -808,10 +1059,7 @@ function MaintenanceTab({
 
   return (
     <>
-      {/* Hours at top */}
-      <HoursSummary aircraft={aircraft} form={form} canEdit={canEdit} setF={setF} />
-
-      <div style={{ marginTop: 20 }} className="card">
+      <div style={{ marginTop: 0 }} className="card">
         <div className="card-header">
           <span className="card-title">Planned Maintenance</span>
         </div>
@@ -1293,21 +1541,15 @@ function HoursSummary({ aircraft, form, canEdit, setF }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 420px)', gap: 20 }}>
       <div className="card">
         <div style={{ fontWeight: 700, marginBottom: 16 }}>Time Since New (TSN)</div>
-        {canEdit ? (
-          <>
-            <FormField label="Total Hours (TSN)">
-              <input type="number" step="0.1" min="0" value={form.total_hours_tsn} onChange={e => setF({ total_hours_tsn: e.target.value })} placeholder="0.0" />
-            </FormField>
-            <FormField label="Engine Hours">
-              <input type="number" step="0.1" min="0" value={form.engine_hours} onChange={e => setF({ engine_hours: e.target.value })} placeholder="0.0" />
-            </FormField>
-          </>
-        ) : (
-          <>
-            <InfoRow label="Total (TSN)" value={aircraft.total_hours_tsn != null ? `${aircraft.total_hours_tsn.toFixed(1)} h` : null} mono />
-            <InfoRow label="Engine"      value={aircraft.engine_hours != null ? `${aircraft.engine_hours.toFixed(1)} h` : null} mono />
-          </>
-        )}
+        <>
+          <InfoRow label="Total (TSN)" value={aircraft.total_hours_tsn != null ? `${Number(aircraft.total_hours_tsn).toFixed(1)} h` : null} mono />
+          <InfoRow label="Engine"      value={aircraft.engine_hours != null ? `${Number(aircraft.engine_hours).toFixed(1)} h` : null} mono />
+          {canEdit && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Update hours in the <strong>Maintenance</strong> tab → Flight Hours (keeps a dated log).
+            </div>
+          )}
+        </>
       </div>
     </div>
   );
@@ -1595,6 +1837,15 @@ export default function FleetDetail() {
     const componentName = (newSerial.component_name || newSerial.component || '').trim();
     // Only component name is required now; serial number is optional
     if (!componentName) return;
+    // Limited-life parts with a calendar lifespan need their basis date entered.
+    const ll = componentNames.find(cn => cn.component_type === newSerial.component_type && cn.name === componentName && Number(cn.is_limited_life));
+    if (ll && ll.lifespan_years != null && ll.lifespan_years !== '') {
+      const dateField = ll.lifespan_basis === 'install' ? 'date_installed' : 'manufacturing_date';
+      if (!newSerial[dateField]) {
+        toast.error(`This is a limited-life item — please enter the ${ll.lifespan_basis === 'install' ? 'date installed' : 'manufacturing date'}.`);
+        return;
+      }
+    }
     setSerialSaving(true);
     try {
       const payload = {
@@ -1687,6 +1938,7 @@ export default function FleetDetail() {
       'Component Name':    s.component_name || s.component || '',
       'Type':              s.component_type || '',
       'Serial Number':     s.serial_number  || '',
+      'Additional Serials':componentExtraSerials(s),
       'System ID':         s.system_id      || '',
       'Software Version':  s.software_version || '',
       'Manufactured':      fmt(s.manufacturing_date),
@@ -1703,9 +1955,9 @@ export default function FleetDetail() {
 
     const ws = XLSX.utils.json_to_sheet(rows);
 
-    // Column widths
+    // Column widths (one per column in the row objects above)
     ws['!cols'] = [
-      { wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 18 }, { wch: 20 },
+      { wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 40 }, { wch: 18 }, { wch: 20 },
       { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
       { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 28 },
     ];
@@ -1730,25 +1982,33 @@ export default function FleetDetail() {
       ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
       : '<div class="empty">None recorded.</div>';
 
-    // Identity grid
-    const info = [
+    // Identity grid — only include fields that are actually filled in.
+    const infoRaw = [
       ['BW Serial', aircraft.bw_serial], ['Registration', aircraft.registration], ['Model', aircraft.model],
       ['Build Status', buildStatusLabel(aircraft.build_status, buildStatuses)],
       ['Owner / Customer', aircraft.customer_name], ['Country', aircraft.country_name],
-      ['First Flight', d(aircraft.first_flight_date)], ['Delivery', d(aircraft.delivery_date)],
-      ['Airworthiness', aircraft.airworthiness_status], ['Airworthiness Expiry', d(aircraft.airworthiness_expiry)],
-      ['Total Hours (TSN)', aircraft.total_hours_tsn != null ? aircraft.total_hours_tsn + ' h' : '—'],
-      ['Engine Hours', aircraft.engine_hours != null ? aircraft.engine_hours + ' h' : '—'],
+      ['First Flight', aircraft.first_flight_date ? d(aircraft.first_flight_date) : null],
+      ['Delivery', aircraft.delivery_date ? d(aircraft.delivery_date) : null],
+      ['Airworthiness', aircraft.airworthiness_status],
+      ['Airworthiness Expiry', aircraft.airworthiness_expiry ? d(aircraft.airworthiness_expiry) : null],
+      ['Total Hours (TSN)', aircraft.total_hours_tsn != null ? aircraft.total_hours_tsn + ' h' : null],
+      ['Engine Hours', aircraft.engine_hours != null ? aircraft.engine_hours + ' h' : null],
+      ['Propeller Hours', aircraft.prop_hours != null ? aircraft.prop_hours + ' h' : null],
     ];
-    const infoGrid = `<div class="info-grid">${info.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v || '—')}</div></div>`).join('')}</div>`;
+    const info = infoRaw.filter(([, v]) => v != null && String(v).trim() !== '' && v !== '—');
+    const infoGrid = info.length ? `<div class="info-grid">${info.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v)}</div></div>`).join('')}</div>` : '';
 
-    // Weight & toe-in
+    // Weight & balance — wheels, total weight, CG calculation, and toe-in.
+    const cg = calcCG(aircraft.nose_wheel_weight, aircraft.left_wheel_weight, aircraft.right_wheel_weight);
     const wb = [];
     if (aircraft.nose_wheel_weight != null) wb.push(['Nose wheel', aircraft.nose_wheel_weight + ' kg']);
     if (aircraft.left_wheel_weight != null) wb.push(['Left main', aircraft.left_wheel_weight + ' kg']);
     if (aircraft.right_wheel_weight != null) wb.push(['Right main', aircraft.right_wheel_weight + ' kg']);
+    if (cg) wb.push(['Total weight', cg.totalWeight + ' kg']);
     if (aircraft.toe_in_left != null) wb.push(['Toe-in left', aircraft.toe_in_left + '°']);
     if (aircraft.toe_in_right != null) wb.push(['Toe-in right', aircraft.toe_in_right + '°']);
+    if (cg) wb.push(['CG position', cg.cgMm + ' mm']);
+    if (cg) wb.push(['CG % MAC', cg.cgPct + ' %' + (cg.ok ? '' : ' — outside 15–20%')]);
     const wbBody = wb.length ? `<div class="info-grid">${wb.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v)}</div></div>`).join('')}</div>` : '';
 
     // Configuration (selected options grouped)
@@ -1758,11 +2018,15 @@ export default function FleetDetail() {
       ? Object.entries(byCat).map(([cat, opts]) => `<div class="cfg-cat"><strong>${esc(cat)}</strong>: ${opts.map(o => esc(o.label)).join(', ')}</div>`).join('')
       : '';
 
-    // Components
-    const compRows = serials.filter(s => !s.uninstalled).map(s => `<tr>
+    // Components — include the extra part serials (governor/propeller) and repack/test date.
+    const compRows = serials.filter(s => !s.uninstalled).map(s => {
+      const extra = componentExtraSerials(s);
+      const serialCell = `${esc(s.serial_number || (extra ? '' : '—'))}${extra ? `<div style="font-size:9px;color:#666">${esc(extra)}</div>` : ''}`;
+      return `<tr>
       <td>${esc(s.component_type || '—')}</td><td>${esc(s.component_name || s.component)}</td>
-      <td>${esc(s.serial_number || '—')}</td><td>${esc(s.software_version || '—')}</td>
-      <td>${d(s.date_installed)}</td><td>${d(s.expiry_date)}</td></tr>`);
+      <td>${serialCell}</td><td>${esc(s.software_version || '—')}</td>
+      <td>${d(s.date_installed)}</td><td>${d(s.expiry_date)}</td><td>${d(s.repack_date)}</td></tr>`;
+    });
 
     // Events
     const evRows = events.map(e => `<tr><td>${d(e.event_date)}</td><td>${esc(e.event_type)}</td><td>${esc(e.title)}</td><td>${esc(e.description || '')}</td></tr>`);
@@ -1817,9 +2081,10 @@ export default function FleetDetail() {
     <div class="doc-ref"><strong>BW-${esc(aircraft.bw_serial)}</strong>${aircraft.registration ? ' · ' + esc(aircraft.registration) : ''}<br>${esc(aircraft.model || '')}<br>Generated: ${now}</div>
   </div>
   ${sect('Aircraft', infoGrid)}
-  ${sect('Weight & Toe-in', wbBody)}
+  ${sect('Weight & Balance', wbBody)}
+  ${sect('Notes', aircraft.notes ? `<div class="cfg-cat" style="white-space:pre-wrap">${esc(aircraft.notes)}</div>` : '')}
   ${sect('Configuration', configBody)}
-  ${sect('Components', rowsTable(['Type', 'Component', 'Serial', 'SW Version', 'Installed', 'Expiry'], compRows))}
+  ${sect('Components', rowsTable(['Type', 'Component', 'Serial', 'SW Version', 'Installed', 'Expiry', 'Repack/Test'], compRows))}
   ${sect('Service History', rowsTable(['Date', 'Service', 'Signed By', 'Hours'], srRows))}
   ${sect('Maintenance Work Orders', rowsTable(['WO', 'Status', 'Planned', 'Completed', 'Items'], pmRows))}
   ${sect('Events', rowsTable(['Date', 'Type', 'Title', 'Description'], evRows))}
@@ -2422,20 +2687,34 @@ export default function FleetDetail() {
 
       {/* ── MAINTENANCE ──────────────────────────────────────────────────────── */}
       {tab === 'Maintenance' && (
-        <MaintenanceTab
-          aircraft={aircraft}
-          serviceTemplates={serviceTemplates}
-          serviceRecords={serviceRecords}
-          setServiceRecords={setServiceRecords}
-          plannedMaintenance={plannedMaintenance}
-          setPlannedMaintenance={setPlannedMaintenance}
-          form={form}
-          canEdit={canEdit}
-          setF={setF}
-          isSupervisor={isSupervisor}
-          toast={toast}
-          users={users}
-        />
+        <>
+          <HoursLogSection
+            aircraftId={aircraft.id}
+            canEdit={canEdit}
+            currentTsn={aircraft.total_hours_tsn}
+            currentEngine={aircraft.engine_hours}
+            onSync={(entry) => {
+              setAircraft(a => a ? { ...a, total_hours_tsn: Number(entry.total_hours), engine_hours: entry.engine_hours != null ? Number(entry.engine_hours) : a.engine_hours } : a);
+              // Keep the edit form in sync so a later aircraft save doesn't revert the hours.
+              setForm(f => ({ ...f, total_hours_tsn: String(entry.total_hours), engine_hours: entry.engine_hours != null ? String(entry.engine_hours) : f.engine_hours }));
+            }}
+            toast={toast}
+          />
+          <MaintenanceTab
+            aircraft={aircraft}
+            serviceTemplates={serviceTemplates}
+            serviceRecords={serviceRecords}
+            setServiceRecords={setServiceRecords}
+            plannedMaintenance={plannedMaintenance}
+            setPlannedMaintenance={setPlannedMaintenance}
+            form={form}
+            canEdit={canEdit}
+            setF={setF}
+            isSupervisor={isSupervisor}
+            toast={toast}
+            users={users}
+          />
+        </>
       )}
 
       {/* ── COMPONENTS ───────────────────────────────────────────────────────── */}
@@ -2489,6 +2768,35 @@ export default function FleetDetail() {
                   {isUninstalled && <span className="badge badge-ghost" style={{ fontSize: 10 }}>Uninstalled</span>}
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{s.component_name || s.component}</div>
+
+                {/* Limited-life notice + computed retirement */}
+                {(() => {
+                  const ll = componentNames.find(cn => cn.component_type === s.component_type && cn.name === (s.component_name || s.component) && Number(cn.is_limited_life));
+                  if (!ll) return null;
+                  const hasHours = ll.tbo_hours != null && ll.tbo_hours !== '';
+                  const hasYears = ll.lifespan_years != null && ll.lifespan_years !== '';
+                  const basisDate = ll.lifespan_basis === 'install' ? s.date_installed : s.manufacturing_date;
+                  let expiry = null;
+                  if (hasYears && basisDate) {
+                    expiry = new Date(String(basisDate).slice(0, 10) + 'T00:00:00');
+                    expiry.setFullYear(expiry.getFullYear() + Math.floor(Number(ll.lifespan_years)));
+                    const frac = Number(ll.lifespan_years) % 1;
+                    if (frac) expiry.setMonth(expiry.getMonth() + Math.round(frac * 12));
+                  }
+                  const expired = expiry && expiry < new Date();
+                  const actionWord = ll.life_action === 'overhaul' ? 'OVERHAUL' : 'RETIRE';
+                  return (
+                    <div style={{ marginBottom: 8, padding: '7px 10px', borderRadius: 6, border: `1px solid ${expired ? 'var(--danger)' : 'var(--warning)'}` }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: expired ? 'var(--danger)' : 'var(--warning)' }}>⏳ LIMITED LIFE — {actionWord}{expired ? ' DUE' : ''}</span>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                        {hasHours && <>TBO {Number(ll.tbo_hours).toFixed(0)} h</>}
+                        {hasHours && hasYears ? ' · ' : ''}
+                        {hasYears && <>{Number(ll.lifespan_years)} yr {expiry ? `→ ${expiry.toLocaleDateString('en-GB')}` : `from ${ll.lifespan_basis === 'install' ? 'install' : 'mfg'} date`}</>}
+                        {hasHours && hasYears ? ' (whichever first)' : ''}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Only the fields with values render */}
                 <Field label="Serial number"    value={s.serial_number} mono />
@@ -2723,6 +3031,34 @@ export default function FleetDetail() {
                       <FormField label="Repack/Test date">
                         <input type="date" value={newSerial.repack_date} onChange={e => setNewSerial(n => ({ ...n, repack_date: e.target.value }))} />
                       </FormField>
+
+                      {/* ── Limited-life notice ── */}
+                      {(() => {
+                        const ll = componentNames.find(cn => cn.component_type === newSerial.component_type && cn.name === newSerial.component_name && Number(cn.is_limited_life));
+                        if (!ll) return null;
+                        const basisLabel = ll.lifespan_basis === 'install' ? 'installed-on-aircraft date' : 'manufacturing date';
+                        const needDate = ll.lifespan_years != null && ll.lifespan_years !== '';
+                        const dateField = ll.lifespan_basis === 'install' ? 'date_installed' : 'manufacturing_date';
+                        const missing = needDate && !newSerial[dateField];
+                        const hasHours = ll.tbo_hours != null && ll.tbo_hours !== '';
+                        return (
+                          <div style={{ gridColumn: '1 / -1', border: `1px solid ${missing ? 'var(--danger)' : 'var(--warning)'}`, background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px' }}>
+                            <div style={{ fontWeight: 700, color: 'var(--warning)' }}>⏳ Limited life item — {ll.life_action === 'overhaul' ? 'overhaul' : 'retire'}</div>
+                            <div style={{ fontSize: 13, marginTop: 4 }}>
+                              {ll.life_action === 'overhaul' ? 'Overhaul' : 'Retire'} at{' '}
+                              {hasHours && <strong>{Number(ll.tbo_hours).toFixed(0)} h</strong>}
+                              {hasHours && needDate ? ' or ' : ''}
+                              {needDate && <><strong>{Number(ll.lifespan_years)} year(s)</strong> from the {basisLabel}</>}
+                              {hasHours && needDate ? ' — whichever comes first.' : '.'}
+                            </div>
+                            {needDate && (
+                              <div style={{ fontSize: 12, color: missing ? 'var(--danger)' : 'var(--text-muted)', marginTop: 4 }}>
+                                {missing ? `⚠ The ${basisLabel} is required for this part.` : `Lifespan counted from the ${basisLabel}.`}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* ── Propeller-specific fields ── */}
                       {/propeller|prop/i.test(newSerial.component_type) && (

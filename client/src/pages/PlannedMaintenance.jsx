@@ -118,7 +118,7 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
 
         {/* Title + description */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, color: isSigned ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: isSigned ? 'line-through' : 'none' }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
             {item.title || item.template_title || '—'}
             {item.work_category === 'warranty' && (
               <span style={{ marginLeft: 6, fontSize: 9, padding: '1px 6px', borderRadius: 10, background: '#3b82f622', color: '#3b82f6', border: '1px solid #3b82f644', fontWeight: 700, verticalAlign: 'middle', textDecoration: 'none' }}>WARRANTY</span>
@@ -323,9 +323,11 @@ function ItemRow({ item, users, currentUser, isSupervisor, aircraftTsn, template
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function emptySignoffForm(item) {
+  // Pre-fill total labour with the sum of the work items' hours (still editable).
+  const summed = (item?.items || []).reduce((s, it) => s + (it.labor_hours != null ? Number(it.labor_hours) : 0), 0);
   return {
     completed_date: new Date().toISOString().slice(0, 10),
-    labor_hours: '',
+    labor_hours: summed > 0 ? String(Number(summed.toFixed(1))) : '',
     additional_work: '',
     signoff_notes: item?.planned_comments || '',
     signed_by: '',
@@ -1023,7 +1025,7 @@ ${pm.signoff_notes ? `
                                 onChange={e => setSignoffForm(f => ({ ...f, completed_date: e.target.value }))}
                               />
                             </LabeledField>
-                            <LabeledField label="Labor Hours">
+                            <LabeledField label="Labor Hours (summed from work items — editable)">
                               <input
                                 type="number"
                                 min="0"

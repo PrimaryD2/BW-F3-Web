@@ -144,6 +144,11 @@ export const createDemo = (d)     => api.post('/demos', d);
 export const updateDemo = (id, d) => api.put(`/demos/${id}`, d);
 export const deleteDemo = (id)    => api.delete(`/demos/${id}`);
 
+export const getFleetHoursLog    = (id)        => api.get(`/fleet/${id}/hours-log`);
+export const addFleetHoursLog    = (id, d)     => api.post(`/fleet/${id}/hours-log`, d);
+export const updateFleetHoursLog = (id, lid, d)=> api.put(`/fleet/${id}/hours-log/${lid}`, d);
+export const deleteFleetHoursLog = (id, lid)   => api.delete(`/fleet/${id}/hours-log/${lid}`);
+
 export const addFleetContact    = (id, d)       => api.post(`/fleet/${id}/contacts`, d);
 export const updateFleetContact = (id, cid, d)  => api.put(`/fleet/${id}/contacts/${cid}`, d);
 export const deleteFleetContact = (id, cid)     => api.delete(`/fleet/${id}/contacts/${cid}`);

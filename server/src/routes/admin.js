@@ -483,14 +483,30 @@ router.get('/component-names', async (_req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// Normalise the limited-life fields off a request body.
+function limitedLifeFields(body) {
+  const isLL = !!body.is_limited_life;
+  const num = (v) => (v === '' || v == null || isNaN(parseFloat(v)) ? null : parseFloat(v));
+  const basis = body.lifespan_basis === 'install' ? 'install' : 'manufacturing';
+  const action = body.life_action === 'overhaul' ? 'overhaul' : 'retire';
+  return {
+    is_limited_life: isLL ? 1 : 0,
+    tbo_hours: isLL ? num(body.tbo_hours) : null,
+    lifespan_years: isLL ? num(body.lifespan_years) : null,
+    lifespan_basis: basis,
+    life_action: action,
+  };
+}
+
 router.post('/component-names', async (req, res) => {
   const { component_type, name, sort_order = 0 } = req.body || {};
   if (!String(component_type || '').trim() || !String(name || '').trim())
     return res.status(400).json({ error: 'component_type and name are required' });
+  const ll = limitedLifeFields(req.body || {});
   try {
     const r = await query(
-      'INSERT INTO fleet_component_names (component_type, name, sort_order) VALUES (?,?,?)',
-      [component_type.trim(), name.trim(), sort_order]
+      'INSERT INTO fleet_component_names (component_type, name, sort_order, is_limited_life, tbo_hours, lifespan_years, lifespan_basis, life_action) VALUES (?,?,?,?,?,?,?,?)',
+      [component_type.trim(), name.trim(), sort_order, ll.is_limited_life, ll.tbo_hours, ll.lifespan_years, ll.lifespan_basis, ll.life_action]
     );
     const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [r.insertId]);
     res.status(201).json(rows[0]);
@@ -499,10 +515,11 @@ router.post('/component-names', async (req, res) => {
 
 router.put('/component-names/:id', async (req, res) => {
   const { component_type, name, sort_order } = req.body || {};
+  const ll = limitedLifeFields(req.body || {});
   try {
     await query(
-      'UPDATE fleet_component_names SET component_type=?, name=?, sort_order=? WHERE id=?',
-      [component_type, name, sort_order ?? 0, req.params.id]
+      'UPDATE fleet_component_names SET component_type=?, name=?, sort_order=?, is_limited_life=?, tbo_hours=?, lifespan_years=?, lifespan_basis=?, life_action=? WHERE id=?',
+      [component_type, name, sort_order ?? 0, ll.is_limited_life, ll.tbo_hours, ll.lifespan_years, ll.lifespan_basis, ll.life_action, req.params.id]
     );
     const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [req.params.id]);
     res.json(rows[0]);

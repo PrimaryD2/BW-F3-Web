@@ -739,6 +739,29 @@ const ALTER_STMTS = [
   // Seed the editable build-status list (JSON [{value,label}]) if not already set.
   `INSERT IGNORE INTO fleet_settings (setting_key, setting_value) VALUES
      ('build_statuses', '[{"value":"in_production","label":"In Production"},{"value":"completed","label":"Completed"},{"value":"delivered","label":"Delivered"},{"value":"maintenance","label":"Maintenance"},{"value":"stored","label":"Stored"},{"value":"for_sale","label":"For Sale"},{"value":"written_off","label":"Written Off"}]')`,
+  // Limited-life components: defined per component NAME (in Admin → Component Names),
+  // applies to every component instance with that name. TBO hours and/or a calendar
+  // lifespan (years) measured from the manufacturing date or the install date.
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS is_limited_life BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS tbo_hours DECIMAL(10,1) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS lifespan_years DECIMAL(6,2) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS lifespan_basis VARCHAR(20) NOT NULL DEFAULT 'manufacturing'`,
+  // Some limited-life parts must be retired, others just overhauled — track which.
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS life_action VARCHAR(20) NOT NULL DEFAULT 'retire'`,
+  // Flight-hours log: every time an aircraft's total hours are updated, keep a dated
+  // entry so we can show the history, a trend graph and yearly stats.
+  `CREATE TABLE IF NOT EXISTS fleet_hours_log (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     aircraft_id INT NOT NULL,
+     log_date DATE NOT NULL,
+     total_hours DECIMAL(10,1) NOT NULL,
+     note VARCHAR(300) NULL,
+     logged_by INT NULL,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     FOREIGN KEY (aircraft_id) REFERENCES fleet_aircraft(id) ON DELETE CASCADE
+   )`,
+  // Hours log also tracks engine hours alongside airframe TSN
+  `ALTER TABLE fleet_hours_log ADD COLUMN IF NOT EXISTS engine_hours DECIMAL(10,1) NULL`,
   // Demos / "aircraft away" schedule — shown as multi-day blocks on the dashboard calendar
   `CREATE TABLE IF NOT EXISTS fleet_demos (
      id INT AUTO_INCREMENT PRIMARY KEY,

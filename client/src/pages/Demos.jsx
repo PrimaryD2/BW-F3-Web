@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getDemos, createDemo, updateDemo, deleteDemo } from '../api';
+import { getDemos, createDemo, updateDemo, deleteDemo, getFleetList } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
@@ -28,6 +28,7 @@ export default function Demos() {
   const toast = useToast();
 
   const [demos, setDemos] = useState([]);
+  const [aircraftList, setAircraftList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -37,10 +38,15 @@ export default function Demos() {
   useEffect(() => { load(); }, []);
   async function load() {
     setLoading(true);
-    try { const r = await getDemos(); setDemos(r.data || []); }
-    catch { toast.error('Failed to load demos'); }
-    finally { setLoading(false); }
+    try {
+      const [dRes, fRes] = await Promise.allSettled([getDemos(), getFleetList()]);
+      if (dRes.status === 'fulfilled') setDemos(dRes.value.data || []);
+      else toast.error('Failed to load demos');
+      if (fRes.status === 'fulfilled') setAircraftList(fRes.value.data || []);
+    } finally { setLoading(false); }
   }
+
+  const aircraftLabel = (a) => `BW-${a.bw_serial}${a.registration ? ` · ${a.registration}` : ''}`;
 
   function openNew() { setEditId(null); setForm({ ...EMPTY, start_date: today(), end_date: today() }); setShowForm(true); }
   function openEdit(d) {
@@ -165,7 +171,17 @@ export default function Demos() {
               <div className="form-row form-row-2">
                 <div className="form-group">
                   <label>Aircraft</label>
-                  <input placeholder="e.g. BW-032 / SE-XYZ" value={form.aircraft} onChange={e => setForm(f => ({ ...f, aircraft: e.target.value }))} />
+                  <select value={form.aircraft} onChange={e => setForm(f => ({ ...f, aircraft: e.target.value }))}>
+                    <option value="">— Select aircraft —</option>
+                    {aircraftList.map(a => {
+                      const label = aircraftLabel(a);
+                      return <option key={a.id} value={label}>{label}</option>;
+                    })}
+                    {/* Preserve a custom value that isn't in the fleet list */}
+                    {form.aircraft && !aircraftList.some(a => aircraftLabel(a) === form.aircraft) && (
+                      <option value={form.aircraft}>{form.aircraft}</option>
+                    )}
+                  </select>
                 </div>
                 <div className="form-group">
                   <label>Location</label>
