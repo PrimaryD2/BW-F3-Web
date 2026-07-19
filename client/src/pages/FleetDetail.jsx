@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 import {
   getFleetAircraft, updateFleetAircraft,
   addFleetContact, updateFleetContact, deleteFleetContact,
@@ -24,6 +23,11 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { parseBuildStatuses, buildStatusBadge, buildStatusLabel } from '../utils/buildStatus';
+import {
+  lifeRules, ruleDueDate, describeRule, lifeActionVerb, lifeActionWord,
+  basisField, basisLabel, basisShort, rulesNeedDate, limitedLifeSummary,
+} from '../utils/limitedLife';
+import { fmtDate, fmtDateTime, toDateInput } from '../utils/formatDate';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,10 +82,7 @@ function FlagIcon({ code }) {
   );
 }
 
-function fmtDate(val) {
-  if (!val) return '—';
-  return new Date(val).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
+// fmtDate / fmtDateTime come from utils/formatDate — one format everywhere.
 
 // ─── Field helpers ───────────────────────────────────────────────────────────
 
@@ -136,21 +137,117 @@ function calcCG(nose, left, right) {
   };
 }
 
-// Governor and propeller store their real serials across several extra_data fields
-// (multiple parts in one component) rather than the main Serial Number box.
-function componentExtraSerials(s) {
+// Labels for the type-specific extra_data fields (propeller blades, governor
+// plate/solenoid, …). Anything not listed still exports, using its raw key.
+const EXTRA_FIELD_LABELS = {
+  blade1: 'Blade 1', blade2: 'Blade 2', blade3: 'Blade 3',
+  hub: 'Hub', spinner: 'Spinner', plate: 'Plate', weights: 'Weights',
+  gov_plate: 'Gov. Plate S/N', gov_solenoid: 'Gov. Solenoid S/N',
+  gov_hole_size: 'Plate Hole Size',
+};
+
+const prettyKey = (k) => EXTRA_FIELD_LABELS[k] || k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+// Every populated extra_data field as [label, value] pairs. Components like the
+// propeller and governor carry most of their real serials here rather than in
+// the main Serial Number box, so exports must not stop at serial_number.
+// Driven by the data, not by a component-type regex — a renamed or new type
+// would otherwise silently drop its extra fields.
+function componentExtraFields(s) {
   const ex = (s.extra_data && typeof s.extra_data === 'object') ? s.extra_data : {};
-  const parts = [];
-  const add = (label, val) => { if (val != null && String(val).trim() !== '') parts.push(`${label}: ${val}`); };
-  if (/propeller|prop/i.test(s.component_type || '')) {
-    add('Blade 1', ex.blade1); add('Blade 2', ex.blade2); add('Blade 3', ex.blade3);
-    add('Hub', ex.hub); add('Spinner', ex.spinner); add('Plate', ex.plate); add('Weights', ex.weights);
+  return Object.entries(ex)
+    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .map(([k, v]) => [prettyKey(k), k === 'gov_hole_size' ? `${v} mm` : String(v)]);
+}
+
+// Same data flattened to one line, for a table cell or spreadsheet column.
+function componentExtraSerials(s) {
+  return componentExtraFields(s).map(([l, v]) => `${l}: ${v}`).join(' | ');
+}
+
+// ─── Printable export documents ───────────────────────────────────────────────
+// Every export opens the same branded, print-ready page rather than a
+// spreadsheet, so it can be printed or saved as PDF straight away.
+
+const escHtml = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+
+const PRINT_CSS = `
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a;padding:16mm 18mm}
+  .toolbar{position:fixed;top:0;left:0;right:0;background:#1a1a1a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;justify-content:flex-end;z-index:99}
+  .toolbar button{font-size:13px;padding:7px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+  .b-print{background:#3b82f6;color:#fff}.b-close{background:#444;color:#fff}
+  body.has-toolbar{padding-top:60px}
+  .brand-row{margin-bottom:12px}
+  .brand-row img{height:32px;width:auto;filter:invert(1);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .doc-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #1a1a1a;padding-bottom:12px;margin-bottom:14px}
+  h1{font-size:19px;font-weight:800}.sub{font-size:10px;color:#777;margin-top:3px}
+  .doc-ref{text-align:right;font-size:11px;color:#555;line-height:1.6}.doc-ref strong{font-size:13px;color:#1a1a1a}
+  h2{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#555;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
+  .info-grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #ddd}
+  .info-cell{padding:6px 9px;border-right:1px solid #ddd;border-bottom:1px solid #ddd}
+  .info-cell label{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#999;display:block}
+  .info-cell .val{font-size:12px;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin-bottom:6px}
+  th,td{padding:5px 7px;border:1px solid #e0e0e0;text-align:left;font-size:10.5px;vertical-align:top}
+  th{background:#f2f2f2;font-size:8.5px;text-transform:uppercase;letter-spacing:0.04em;color:#666}
+  tbody tr:nth-child(even) td{background:#fafafa}
+  .cfg-cat{font-size:11px;margin-bottom:4px}
+  .empty{font-size:11px;color:#999;font-style:italic;padding:4px 0}
+  .sub-serials{font-size:9px;color:#666;margin-top:2px;line-height:1.5}
+  .overdue{color:#c00;font-weight:700}
+  .summary{font-size:11px;color:#555;margin-bottom:10px}
+  .footer{margin-top:24px;border-top:1px solid #ddd;padding-top:7px;font-size:9px;color:#bbb;display:flex;justify-content:space-between}
+  @media print{
+    .toolbar{display:none!important}body.has-toolbar{padding-top:8mm}@page{margin:8mm;size:A4}
+    /* Keep a section's heading with its table, and never split a row across pages. */
+    h2{break-after:avoid;page-break-after:avoid}
+    tr{break-inside:avoid;page-break-inside:avoid}
+    thead{display:table-header-group}
   }
-  if (/governor/i.test(s.component_type || '')) {
-    add('Gov. Plate S/N', ex.gov_plate); add('Gov. Solenoid S/N', ex.gov_solenoid);
-    add('Plate Hole Size', ex.gov_hole_size ? `${ex.gov_hole_size} mm` : '');
-  }
-  return parts.join(' | ');
+`;
+
+// A titled section — omitted entirely when it has no body.
+const docSection = (title, body) => body ? `<h2>${escHtml(title)}</h2>${body}` : '';
+
+const docTable = (headers, rows, emptyText = 'None recorded.') => rows.length
+  ? `<table><thead><tr>${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
+  : `<div class="empty">${escHtml(emptyText)}</div>`;
+
+// Opens a new window with the branded document chrome around `body`.
+// Returns false if the pop-up was blocked so the caller can warn.
+function openPrintDocument({ title, subtitle, refLines, body, toolbarLabel, footerRef }) {
+  const w = window.open('', '_blank');
+  if (!w) return false;
+  const origin = window.location.origin;
+  const now = fmtDateTime(new Date());
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escHtml(title)}${footerRef ? ' — ' + escHtml(footerRef) : ''}</title>
+<style>${PRINT_CSS}</style></head><body class="has-toolbar">
+  <div class="toolbar">
+    <span style="margin-right:auto;font-size:12px;color:#bbb">${escHtml(toolbarLabel || title)}</span>
+    <button class="b-print" onclick="window.print()">🖨 Print / Save as PDF</button>
+    <button class="b-close" onclick="window.close()">Close</button>
+  </div>
+  <div class="brand-row"><img src="${origin}/blackwing-logo.png" alt="Blackwing Sweden AB" /></div>
+  <div class="doc-header">
+    <div><h1>${escHtml(title)}</h1><div class="sub">${escHtml(subtitle || '')}</div></div>
+    <div class="doc-ref">${(refLines || []).join('<br>')}<br>Generated: ${now}</div>
+  </div>
+  ${body}
+  <div class="footer"><span>Blackwing Sweden AB · Aircraft Management System</span><span>${escHtml(footerRef || '')} · ${now}</span></div>
+</body></html>`);
+  w.document.close();
+  return true;
+}
+
+// A component is limited-life when its NAME is flagged in Admin → Component Names.
+function limitedLifeRuleFor(s, componentNames) {
+  return componentNames.find(cn =>
+    cn.component_type === s.component_type &&
+    cn.name === (s.component_name || s.component) &&
+    Number(cn.is_limited_life)
+  ) || null;
 }
 
 function CGTable({ cg }) {
@@ -287,6 +384,63 @@ function ToeInSection({ form, aircraft, canEdit, setF, settings }) {
           </>
         ) : (
           <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No toe-in recorded.</div>
+        )
+      )}
+    </>
+  );
+}
+
+// ─── Camber helpers ───────────────────────────────────────────────────────────
+function camberThresholds(settings) {
+  const num = (k, def) => { const v = parseFloat(settings?.[k]); return isNaN(v) ? def : v; };
+  return { wheelMin: num('camber_wheel_min', -2), wheelMax: num('camber_wheel_max', 2) };
+}
+
+function CamberSection({ form, aircraft, canEdit, setF, settings }) {
+  const th = camberThresholds(settings);
+  const left  = canEdit ? form.camber_left  : aircraft.camber_left;
+  const right = canEdit ? form.camber_right : aircraft.camber_right;
+  const l = parseFloat(left);
+  const r = parseFloat(right);
+
+  const wheelOk = (v) => isNaN(v) ? null : (v >= th.wheelMin && v <= th.wheelMax);
+  const colorFor = (ok) => ok == null ? 'var(--text-secondary)' : ok ? '#16a34a' : 'var(--danger)';
+
+  return (
+    <>
+      <div style={{ fontWeight: 700, margin: '16px 0 4px' }}>Main Gear Camber</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+        Acceptable: {th.wheelMin}–{th.wheelMax}° per wheel
+      </div>
+      {canEdit ? (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <FormField label="Left Main (°)" half>
+            <input
+              type="number" step="0.01" value={form.camber_left}
+              onChange={e => setF({ camber_left: e.target.value })}
+              placeholder="0.00"
+              style={{ borderColor: wheelOk(l) === false ? 'var(--danger)' : undefined }}
+            />
+            {wheelOk(l) === false && <span style={{ fontSize: 10, color: 'var(--danger)' }}>Outside {th.wheelMin}–{th.wheelMax}°</span>}
+          </FormField>
+          <FormField label="Right Main (°)" half>
+            <input
+              type="number" step="0.01" value={form.camber_right}
+              onChange={e => setF({ camber_right: e.target.value })}
+              placeholder="0.00"
+              style={{ borderColor: wheelOk(r) === false ? 'var(--danger)' : undefined }}
+            />
+            {wheelOk(r) === false && <span style={{ fontSize: 10, color: 'var(--danger)' }}>Outside {th.wheelMin}–{th.wheelMax}°</span>}
+          </FormField>
+        </div>
+      ) : (
+        (left != null && left !== '') || (right != null && right !== '') ? (
+          <>
+            <InfoRow label="Left Main" value={left != null && left !== '' ? <span style={{ color: colorFor(wheelOk(l)) }}>{l.toFixed(2)}°</span> : null} />
+            <InfoRow label="Right Main" value={right != null && right !== '' ? <span style={{ color: colorFor(wheelOk(r)) }}>{r.toFixed(2)}°</span> : null} />
+          </>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No camber recorded.</div>
         )
       )}
     </>
@@ -448,7 +602,7 @@ function ConfigTab({ configOptions, selectedConfig, canEdit, onToggle, singleSel
 // ─── Flight-hours log + trend graph ──────────────────────────────────────────
 function hlDate(d) {
   if (!d) return '';
-  return new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return fmtDate(d);
 }
 const hlByDate = (a, b) => String(a.log_date).localeCompare(String(b.log_date)) || (a.id - b.id);
 
@@ -1623,6 +1777,7 @@ export default function FleetDetail() {
     notes: '', extra_data: {},
   };
   const [serialSearch,    setSerialSearch]    = useState('');
+  const [serialTypeFilter, setSerialTypeFilter] = useState(''); // '' = all types
   const [serialSortField, setSerialSortField] = useState('component_name');
   const [serialSortDir,   setSerialSortDir]   = useState('asc');
   const [newSerial,    setNewSerial]    = useState(EMPTY_SERIAL);
@@ -1728,6 +1883,8 @@ export default function FleetDetail() {
       right_wheel_weight:    a.right_wheel_weight  != null ? String(a.right_wheel_weight)  : '',
       toe_in_left:           a.toe_in_left         != null ? String(a.toe_in_left)         : '',
       toe_in_right:          a.toe_in_right        != null ? String(a.toe_in_right)        : '',
+      camber_left:           a.camber_left         != null ? String(a.camber_left)         : '',
+      camber_right:          a.camber_right        != null ? String(a.camber_right)        : '',
       airworthiness_status:  a.airworthiness_status  || '',
       airworthiness_expiry:  a.airworthiness_expiry ? a.airworthiness_expiry.slice(0, 10) : '',
       total_hours_tsn:       a.total_hours_tsn     != null ? String(a.total_hours_tsn)     : '',
@@ -1839,12 +1996,9 @@ export default function FleetDetail() {
     if (!componentName) return;
     // Limited-life parts with a calendar lifespan need their basis date entered.
     const ll = componentNames.find(cn => cn.component_type === newSerial.component_type && cn.name === componentName && Number(cn.is_limited_life));
-    if (ll && ll.lifespan_years != null && ll.lifespan_years !== '') {
-      const dateField = ll.lifespan_basis === 'install' ? 'date_installed' : 'manufacturing_date';
-      if (!newSerial[dateField]) {
-        toast.error(`This is a limited-life item — please enter the ${ll.lifespan_basis === 'install' ? 'date installed' : 'manufacturing date'}.`);
-        return;
-      }
+    if (ll && rulesNeedDate(ll) && !newSerial[basisField(ll)]) {
+      toast.error(`This is a limited-life item — please enter the ${basisLabel(ll)}.`);
+      return;
     }
     setSerialSaving(true);
     try {
@@ -1921,66 +2075,165 @@ export default function FleetDetail() {
     } catch { toast.error('Delete failed'); }
   }
 
-  // ─── Export components to Excel ───────────────────────────────────────────
+  // Reference lines shown top-right on every exported document.
+  function docRefLines() {
+    return [
+      `<strong>BW-${escHtml(aircraft?.bw_serial || '—')}</strong>${aircraft?.registration ? ' · ' + escHtml(aircraft.registration) : ''}`,
+      escHtml(aircraft?.model || ''),
+    ].filter(Boolean);
+  }
 
-  function exportComponentsExcel() {
-    const fmt = (d) => d ? new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB') : '';
+  // All populated extra_data fields under the main serial, as printed lines.
+  function serialCellFor(s) {
+    const extras = componentExtraFields(s);
+    const main = escHtml(s.serial_number || (extras.length ? '' : '—'));
+    const rest = extras.length
+      ? `<div class="sub-serials">${extras.map(([l, v]) => `${escHtml(l)}: <strong>${escHtml(v)}</strong>`).join('<br>')}</div>`
+      : '';
+    return `${main}${rest}`;
+  }
 
-    // Build rows for ALL components (active + uninstalled)
-    const allComponents = [...serials].sort((a, b) => {
-      // Active first, then by type, then by name
+  // ─── Export all components (printable document) ───────────────────────────
+
+  function exportComponentsDocument() {
+    // Grouped by type in the admin-defined order, so the document reads the
+    // same way the Components tab does.
+    const typeRank = new Map(componentTypes.map((ct, i) => [ct.name, i]));
+    const rankOf = (t) => typeRank.has(t) ? typeRank.get(t) : componentTypes.length;
+    const ordered = [...serials].sort((a, b) => {
       if (a.uninstalled !== b.uninstalled) return a.uninstalled ? 1 : -1;
+      const ra = rankOf(a.component_type), rb = rankOf(b.component_type);
+      if (ra !== rb) return ra - rb;
       return (a.component_type || '').localeCompare(b.component_type || '') ||
              (a.component_name || a.component || '').localeCompare(b.component_name || b.component || '');
     });
 
-    const rows = allComponents.map(s => ({
-      'Component Name':    s.component_name || s.component || '',
-      'Type':              s.component_type || '',
-      'Serial Number':     s.serial_number  || '',
-      'Additional Serials':componentExtraSerials(s),
-      'System ID':         s.system_id      || '',
-      'Software Version':  s.software_version || '',
-      'Manufactured':      fmt(s.manufacturing_date),
-      'Installed':         fmt(s.date_installed),
-      'Expiry Date':       fmt(s.expiry_date),
-      'Repack/Test Date':  fmt(s.repack_date),
-      'Status':            s.uninstalled ? 'Uninstalled' : 'Installed',
-      'Uninstalled Date':  fmt(s.uninstalled_at),
-      'Uninstall Reason':  s.uninstall_reason  || '',
-      'TSN at Removal':    s.uninstall_tsn != null ? Number(s.uninstall_tsn).toFixed(1) : '',
-      'Uninstall Tech.':   s.uninstall_technician || '',
-      'Notes':             s.notes || '',
-    }));
+    const active = ordered.filter(s => !s.uninstalled);
+    const removed = ordered.filter(s => s.uninstalled);
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const headers = ['Type', 'Component', 'Serial', 'System ID', 'SW Version', 'Manufactured', 'Installed', 'Expiry', 'Repack/Test'];
+    const rowFor = (s) => `<tr>
+      <td>${escHtml(s.component_type || '—')}</td><td>${escHtml(s.component_name || s.component)}</td>
+      <td>${serialCellFor(s)}</td><td>${escHtml(s.system_id || '—')}</td><td>${escHtml(s.software_version || '—')}</td>
+      <td>${fmtDate(s.manufacturing_date)}</td><td>${fmtDate(s.date_installed)}</td>
+      <td>${fmtDate(s.expiry_date)}</td><td>${fmtDate(s.repack_date)}</td></tr>`;
 
-    // Column widths (one per column in the row objects above)
-    ws['!cols'] = [
-      { wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 40 }, { wch: 18 }, { wch: 20 },
-      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
-      { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 28 },
-    ];
+    const removedRows = removed.map(s => `<tr>
+      <td>${escHtml(s.component_type || '—')}</td><td>${escHtml(s.component_name || s.component)}</td>
+      <td>${serialCellFor(s)}</td><td>${fmtDate(s.uninstalled_at)}</td>
+      <td>${escHtml(s.uninstall_reason || '—')}</td>
+      <td>${s.uninstall_tsn != null ? Number(s.uninstall_tsn).toFixed(1) + ' h' : '—'}</td>
+      <td>${escHtml(s.uninstall_technician || '—')}</td></tr>`);
 
-    const wb = XLSX.utils.book_new();
-    const sheetName = `BW-${aircraft?.bw_serial || 'Components'}`;
-    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31)); // Excel sheet name limit
-    XLSX.writeFile(wb, `Components_BW-${aircraft?.bw_serial || 'Aircraft'}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    const body = `
+      <div class="summary">${active.length} installed component${active.length === 1 ? '' : 's'}${removed.length ? ` · ${removed.length} previously removed` : ''} · ${limitedLifeCount} limited-life item${limitedLifeCount === 1 ? '' : 's'}</div>
+      ${docSection('Installed Components', docTable(headers, active.map(rowFor), 'No components recorded.'))}
+      ${removed.length ? docSection('Removed / Uninstalled Components', docTable(['Type', 'Component', 'Serial', 'Removed', 'Reason', 'TSN at Removal', 'Technician'], removedRows)) : ''}
+    `;
+
+    if (!openPrintDocument({
+      title: 'Component List',
+      subtitle: 'All components fitted to this aircraft',
+      refLines: docRefLines(),
+      body,
+      toolbarLabel: `Component List · BW-${aircraft?.bw_serial || ''}`,
+      footerRef: `BW-${aircraft?.bw_serial || ''}`,
+    })) toast.error('Pop-up blocked — please allow pop-ups and try again');
+  }
+
+  // Components whose NAME is flagged limited-life in Admin → Component Names,
+  // paired with their rule and computed due dates. Shared by the Excel export
+  // and the limited-life table in the full document export.
+  function limitedLifeComponents() {
+    const now = new Date();
+    return serials
+      .map(s => ({ s, ll: limitedLifeRuleFor(s, componentNames) }))
+      .filter(x => x.ll)
+      .map(({ s, ll }) => {
+        const basisDate = ll.lifespan_basis === 'install' ? s.date_installed : s.manufacturing_date;
+        const rules = lifeRules(ll).map(rule => {
+          const due = ruleDueDate(rule, basisDate, now);
+          return { rule, due, overdue: !!due && due < now };
+        });
+        return { s, ll, basisDate, rules };
+      })
+      .sort((a, b) => {
+        // Soonest due first — that's the list a technician acts on. Items with
+        // no computable date (missing basis date) sort last.
+        if (a.s.uninstalled !== b.s.uninstalled) return a.s.uninstalled ? 1 : -1;
+        const ad = a.rules.map(r => r.due).filter(Boolean).sort((x, y) => x - y)[0];
+        const bd = b.rules.map(r => r.due).filter(Boolean).sort((x, y) => x - y)[0];
+        if (ad && bd) return ad - bd;
+        if (ad) return -1;
+        if (bd) return 1;
+        return (a.s.component_name || '').localeCompare(b.s.component_name || '');
+      });
+  }
+
+  const limitedLifeCount = serials.filter(s => limitedLifeRuleFor(s, componentNames)).length;
+
+  // ─── Export limited-life items (printable document) ───────────────────────
+  function exportLimitedLifeDocument() {
+    const items = limitedLifeComponents();
+    if (!items.length) { toast.error('No limited-life components on this aircraft'); return; }
+
+    const now = new Date();
+    const daysLeft = (due) => due == null ? '' : Math.ceil((due - now) / 86400000);
+
+    // One row per rule, so a part with a replace AND a retest gets a line each
+    // and the component cell spans them.
+    const rows = [];
+    for (const { s, ll, basisDate, rules } of items) {
+      rules.forEach((r, i) => {
+        const span = rules.length > 1 && i === 0 ? ` rowspan="${rules.length}"` : '';
+        const first = i === 0;
+        const left = first ? `
+          <td${span}>${escHtml(s.component_type || '—')}</td>
+          <td${span}>${escHtml(s.component_name || s.component)}${s.uninstalled ? '<div class="sub-serials">Uninstalled</div>' : ''}</td>
+          <td${span}>${serialCellFor(s)}</td>
+          <td${span}>${fmtDate(basisDate)}<div class="sub-serials">${ll.lifespan_basis === 'install' ? 'from install' : 'from mfg'}</div></td>` : '';
+        const dl = daysLeft(r.due);
+        rows.push(`<tr>${left}
+          <td><strong>${escHtml(lifeActionVerb(r.rule.action))}</strong>${r.rule.recurring ? '<div class="sub-serials">recurring</div>' : ''}</td>
+          <td>${escHtml(describeRule(r.rule) || '—')}</td>
+          <td${r.overdue ? ' class="overdue"' : ''}>${r.due ? fmtDate(r.due) : '<em>no date</em>'}</td>
+          <td${r.overdue ? ' class="overdue"' : ''}>${r.due ? (r.overdue ? `${Math.abs(dl)} days OVERDUE` : `${dl} days`) : '—'}</td>
+        </tr>`);
+      });
+    }
+
+    const overdue = items.filter(x => x.rules.some(r => r.overdue)).length;
+    const undated = items.filter(x => x.rules.some(r => r.rule.months != null && !r.due)).length;
+
+    const body = `
+      <div class="summary">
+        ${items.length} limited-life item${items.length === 1 ? '' : 's'} on this aircraft${overdue ? ` · <strong style="color:#c00">${overdue} overdue</strong>` : ''}${undated ? ` · ${undated} missing a date and cannot be calculated` : ''}
+      </div>
+      ${docTable(
+        ['Type', 'Component', 'Serial', 'Life Counted From', 'Action', 'Limit', 'Due', 'Remaining'],
+        rows, 'No limited-life components recorded.')}
+      <div class="summary" style="margin-top:10px">
+        Limited-life rules are defined per component name in Admin → Component Names.
+        Due dates are calculated from the ${'manufacturing or install'} date shown above.
+      </div>
+    `;
+
+    if (!openPrintDocument({
+      title: 'Limited Life Items',
+      subtitle: 'Life-limited components, actions and due dates',
+      refLines: docRefLines(),
+      body,
+      toolbarLabel: `Limited Life Items · BW-${aircraft?.bw_serial || ''}`,
+      footerRef: `BW-${aircraft?.bw_serial || ''}`,
+    })) toast.error('Pop-up blocked — please allow pop-ups and try again');
   }
 
   // ─── Full aircraft export (print / PDF) — everything attached to the aircraft ──
   function exportAircraftDocument() {
-    const w = window.open('', '_blank');
-    if (!w) { toast.error('Pop-up blocked — please allow pop-ups and try again'); return; }
-    const origin = window.location.origin;
-    const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-    const d = (v) => v ? new Date(v + (String(v).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-    const now = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-    const sect = (title, body) => body ? `<h2>${esc(title)}</h2>${body}` : '';
-    const rowsTable = (headers, rows) => rows.length
-      ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
-      : '<div class="empty">None recorded.</div>';
+    const esc = escHtml;
+    const d = (v) => fmtDate(v);
+    const sect = docSection;
+    const rowsTable = docTable;
 
     // Identity grid — only include fields that are actually filled in.
     const infoRaw = [
@@ -2007,6 +2260,8 @@ export default function FleetDetail() {
     if (cg) wb.push(['Total weight', cg.totalWeight + ' kg']);
     if (aircraft.toe_in_left != null) wb.push(['Toe-in left', aircraft.toe_in_left + '°']);
     if (aircraft.toe_in_right != null) wb.push(['Toe-in right', aircraft.toe_in_right + '°']);
+    if (aircraft.camber_left != null) wb.push(['Camber left', aircraft.camber_left + '°']);
+    if (aircraft.camber_right != null) wb.push(['Camber right', aircraft.camber_right + '°']);
     if (cg) wb.push(['CG position', cg.cgMm + ' mm']);
     if (cg) wb.push(['CG % MAC', cg.cgPct + ' %' + (cg.ok ? '' : ' — outside 15–20%')]);
     const wbBody = wb.length ? `<div class="info-grid">${wb.map(([l, v]) => `<div class="info-cell"><label>${esc(l)}</label><div class="val">${esc(v)}</div></div>`).join('')}</div>` : '';
@@ -2018,14 +2273,27 @@ export default function FleetDetail() {
       ? Object.entries(byCat).map(([cat, opts]) => `<div class="cfg-cat"><strong>${esc(cat)}</strong>: ${opts.map(o => esc(o.label)).join(', ')}</div>`).join('')
       : '';
 
-    // Components — include the extra part serials (governor/propeller) and repack/test date.
-    const compRows = serials.filter(s => !s.uninstalled).map(s => {
-      const extra = componentExtraSerials(s);
-      const serialCell = `${esc(s.serial_number || (extra ? '' : '—'))}${extra ? `<div style="font-size:9px;color:#666">${esc(extra)}</div>` : ''}`;
+    // Components split into two tables: limited-life items get their own list
+    // below the normal ones. Combined they overflow an A4 page, and the
+    // limited-life rules need columns the normal table has no room for.
+    const llIds = new Set(limitedLifeComponents().map(x => x.s.id));
+
+    const compRows = serials.filter(s => !s.uninstalled && !llIds.has(s.id)).map(s => `<tr>
+      <td>${esc(s.component_type || '—')}</td><td>${esc(s.component_name || s.component)}</td>
+      <td>${serialCellFor(s)}</td><td>${esc(s.software_version || '—')}</td>
+      <td>${d(s.date_installed)}</td><td>${d(s.expiry_date)}</td><td>${d(s.repack_date)}</td></tr>`);
+
+    // Limited-life table — one row per component, one line per rule.
+    const llRows = limitedLifeComponents().filter(x => !x.s.uninstalled).map(({ s, ll, basisDate, rules }) => {
+      const ruleLines = rules.map(({ rule, due, overdue }) =>
+        `<div${overdue ? ' class="overdue"' : ''}>${esc(lifeActionVerb(rule.action))} ${esc(describeRule(rule))}` +
+        `${due ? ` → <strong>${d(due)}</strong>` : ' → <em>no date</em>'}${overdue ? ' ⚠ DUE' : ''}</div>`
+      ).join('');
       return `<tr>
       <td>${esc(s.component_type || '—')}</td><td>${esc(s.component_name || s.component)}</td>
-      <td>${serialCell}</td><td>${esc(s.software_version || '—')}</td>
-      <td>${d(s.date_installed)}</td><td>${d(s.expiry_date)}</td><td>${d(s.repack_date)}</td></tr>`;
+      <td>${serialCellFor(s)}</td>
+      <td>${d(basisDate)}<div class="sub-serials">${ll.lifespan_basis === 'install' ? 'from install' : 'from mfg'}</div></td>
+      <td>${ruleLines}</td></tr>`;
     });
 
     // Events
@@ -2043,57 +2311,27 @@ export default function FleetDetail() {
     // Paperwork
     const pwRows = paperwork.map(p => `<tr><td>${esc(p.title || p.original_name)}</td><td>${esc(p.category || '—')}</td><td>${d(p.uploaded_at)}</td></tr>`);
 
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Aircraft Record — BW-${esc(aircraft.bw_serial)}</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a;padding:16mm 18mm}
-  .toolbar{position:fixed;top:0;left:0;right:0;background:#1a1a1a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;justify-content:flex-end;z-index:99}
-  .toolbar button{font-size:13px;padding:7px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
-  .b-print{background:#3b82f6;color:#fff}.b-close{background:#444;color:#fff}
-  body.has-toolbar{padding-top:60px}
-  .brand-row{margin-bottom:12px}
-  .brand-row img{height:32px;width:auto;filter:invert(1);-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .doc-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #1a1a1a;padding-bottom:12px;margin-bottom:14px}
-  h1{font-size:19px;font-weight:800}.sub{font-size:10px;color:#777;margin-top:3px}
-  .doc-ref{text-align:right;font-size:11px;color:#555;line-height:1.6}.doc-ref strong{font-size:13px;color:#1a1a1a}
-  h2{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#555;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}
-  .info-grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #ddd}
-  .info-cell{padding:6px 9px;border-right:1px solid #ddd;border-bottom:1px solid #ddd}
-  .info-cell label{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#999;display:block}
-  .info-cell .val{font-size:12px;font-weight:600}
-  table{width:100%;border-collapse:collapse;margin-bottom:6px}
-  th,td{padding:5px 7px;border:1px solid #e0e0e0;text-align:left;font-size:10.5px;vertical-align:top}
-  th{background:#f2f2f2;font-size:8.5px;text-transform:uppercase;letter-spacing:0.04em;color:#666}
-  tbody tr:nth-child(even) td{background:#fafafa}
-  .cfg-cat{font-size:11px;margin-bottom:4px}
-  .empty{font-size:11px;color:#999;font-style:italic;padding:4px 0}
-  .footer{margin-top:24px;border-top:1px solid #ddd;padding-top:7px;font-size:9px;color:#bbb;display:flex;justify-content:space-between}
-  @media print{.toolbar{display:none!important}body.has-toolbar{padding-top:8mm}@page{margin:8mm;size:A4}}
-</style></head><body class="has-toolbar">
-  <div class="toolbar">
-    <span style="margin-right:auto;font-size:12px;color:#bbb">Aircraft Record · BW-${esc(aircraft.bw_serial)}</span>
-    <button class="b-print" onclick="window.print()">🖨 Print / Save as PDF</button>
-    <button class="b-close" onclick="window.close()">Close</button>
-  </div>
-  <div class="brand-row"><img src="${origin}/blackwing-logo.png" alt="Blackwing Sweden AB" /></div>
-  <div class="doc-header">
-    <div><h1>Aircraft Record</h1><div class="sub">Complete aircraft file</div></div>
-    <div class="doc-ref"><strong>BW-${esc(aircraft.bw_serial)}</strong>${aircraft.registration ? ' · ' + esc(aircraft.registration) : ''}<br>${esc(aircraft.model || '')}<br>Generated: ${now}</div>
-  </div>
+    const body = `
   ${sect('Aircraft', infoGrid)}
   ${sect('Weight & Balance', wbBody)}
   ${sect('Notes', aircraft.notes ? `<div class="cfg-cat" style="white-space:pre-wrap">${esc(aircraft.notes)}</div>` : '')}
   ${sect('Configuration', configBody)}
   ${sect('Components', rowsTable(['Type', 'Component', 'Serial', 'SW Version', 'Installed', 'Expiry', 'Repack/Test'], compRows))}
+  ${sect('Limited Life Items', rowsTable(['Type', 'Component', 'Serial', 'Life Counted From', 'Action Required'], llRows))}
   ${sect('Service History', rowsTable(['Date', 'Service', 'Signed By', 'Hours'], srRows))}
   ${sect('Maintenance Work Orders', rowsTable(['WO', 'Status', 'Planned', 'Completed', 'Items'], pmRows))}
   ${sect('Events', rowsTable(['Date', 'Type', 'Title', 'Description'], evRows))}
   ${sect('Paint Codes', rowsTable(['Colour', 'Code', 'Area'], paintRows))}
-  ${sect('Paperwork', rowsTable(['Document', 'Category', 'Uploaded'], pwRows))}
-  <div class="footer"><span>Blackwing Sweden AB · Aircraft Management System</span><span>BW-${esc(aircraft.bw_serial)} · ${now}</span></div>
-</body></html>`;
-    w.document.write(html);
-    w.document.close();
+  ${sect('Paperwork', rowsTable(['Document', 'Category', 'Uploaded'], pwRows))}`;
+
+    if (!openPrintDocument({
+      title: 'Aircraft Record',
+      subtitle: 'Complete aircraft file',
+      refLines: docRefLines(),
+      body,
+      toolbarLabel: `Aircraft Record · BW-${esc(aircraft.bw_serial)}`,
+      footerRef: `BW-${esc(aircraft.bw_serial)}`,
+    })) toast.error('Pop-up blocked — please allow pop-ups and try again');
   }
 
   // ─── Paints ────────────────────────────────────────────────────────────────
@@ -2373,7 +2611,7 @@ export default function FleetDetail() {
           </div>
         </div>
         <button className="btn btn-ghost" onClick={exportAircraftDocument} style={{ flexShrink: 0 }} title="Export the full aircraft file as a printable PDF">
-          ⬇ Export
+          ⬇ Export all documentation
         </button>
         {canEdit && AIRCRAFT_EDIT_TABS.has(tab) && dirty && (
           <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ flexShrink: 0 }}>
@@ -2555,6 +2793,9 @@ export default function FleetDetail() {
                 <InfoRow label="Expiry" value={fmtDate(aircraft.airworthiness_expiry)} />
               </>
             )}
+            {/* Camber lives here rather than under Toe-in: stacking both on the
+                W&B card made the overview noticeably taller. */}
+            <CamberSection form={form} aircraft={aircraft} canEdit={canEdit} setF={setF} settings={fleetSettings} />
           </div>
 
           {/* Weight, Balance & Toe-in — own card so it's visible without scrolling */}
@@ -2724,17 +2965,59 @@ export default function FleetDetail() {
           // Split active vs uninstalled, then apply search + sort
           const q = serialSearch.toLowerCase();
           function matchSerial(s) {
+            if (serialTypeFilter && (s.component_type || '') !== serialTypeFilter) return false;
             if (!q) return true;
             return [s.component_name, s.component, s.component_type, s.serial_number, s.notes]
               .some(v => v && String(v).toLowerCase().includes(q));
           }
+
+          // Types offered in the filter: the admin list first (in its order),
+          // then any type present on this aircraft that isn't in that list.
+          const typeCounts = serials.reduce((m, s) => {
+            const t = s.component_type || '';
+            if (t) m[t] = (m[t] || 0) + 1;
+            return m;
+          }, {});
+          const filterTypes = [
+            ...componentTypes.map(ct => ct.name).filter(n => typeCounts[n]),
+            ...Object.keys(typeCounts).filter(t => !componentTypes.some(ct => ct.name === t)).sort(),
+          ];
+          // Component types follow the order set in Admin → Component Types (same
+          // order the Components page uses), not alphabetical — so a technician
+          // finds a type where they expect it. Unknown types sort last, A–Z.
+          const typeRank = new Map(componentTypes.map((ct, i) => [ct.name, i]));
+          const rankOf = (t) => typeRank.has(t) ? typeRank.get(t) : componentTypes.length;
+          function compareByType(a, b) {
+            const ra = rankOf(a.component_type), rb = rankOf(b.component_type);
+            if (ra !== rb) return ra - rb;
+            return (a.component_type || '').localeCompare(b.component_type || '', undefined, { numeric: true });
+          }
           function sortSerials(list) {
             return [...list].sort((a, b) => {
+              // "Sort by Type" means the admin order; every other field is a
+              // plain value comparison with type as the tie-breaker.
+              if (serialSortField === 'component_type') {
+                const cmp = compareByType(a, b);
+                if (cmp !== 0) return serialSortDir === 'asc' ? cmp : -cmp;
+                return (a.component_name || a.component || '').localeCompare(b.component_name || b.component || '', undefined, { numeric: true });
+              }
               const av = (a[serialSortField] ?? '') + '';
               const bv = (b[serialSortField] ?? '') + '';
               const cmp = av.localeCompare(bv, undefined, { numeric: true });
               return serialSortDir === 'asc' ? cmp : -cmp;
             });
+          }
+
+          // Break a sorted list into [{ type, items }] preserving that order.
+          function groupByType(list) {
+            const groups = [];
+            for (const s of list) {
+              const t = s.component_type || 'Uncategorised';
+              const last = groups[groups.length - 1];
+              if (last && last.type === t) last.items.push(s);
+              else groups.push({ type: t, items: [s] });
+            }
+            return groups;
           }
           const activeComponents      = sortSerials(serials.filter(s => !s.uninstalled).filter(matchSerial));
           const uninstalledComponents = sortSerials(serials.filter(s =>  s.uninstalled).filter(matchSerial));
@@ -2769,31 +3052,36 @@ export default function FleetDetail() {
                 </div>
                 <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{s.component_name || s.component}</div>
 
-                {/* Limited-life notice + computed retirement */}
+                {/* Limited-life notice + computed due dates (one row per rule) */}
                 {(() => {
                   const ll = componentNames.find(cn => cn.component_type === s.component_type && cn.name === (s.component_name || s.component) && Number(cn.is_limited_life));
                   if (!ll) return null;
-                  const hasHours = ll.tbo_hours != null && ll.tbo_hours !== '';
-                  const hasYears = ll.lifespan_years != null && ll.lifespan_years !== '';
+                  const rules = lifeRules(ll);
+                  if (!rules.length) return null;
                   const basisDate = ll.lifespan_basis === 'install' ? s.date_installed : s.manufacturing_date;
-                  let expiry = null;
-                  if (hasYears && basisDate) {
-                    expiry = new Date(String(basisDate).slice(0, 10) + 'T00:00:00');
-                    expiry.setFullYear(expiry.getFullYear() + Math.floor(Number(ll.lifespan_years)));
-                    const frac = Number(ll.lifespan_years) % 1;
-                    if (frac) expiry.setMonth(expiry.getMonth() + Math.round(frac * 12));
-                  }
-                  const expired = expiry && expiry < new Date();
-                  const actionWord = ll.life_action === 'overhaul' ? 'OVERHAUL' : 'RETIRE';
+                  const now = new Date();
+                  const rows = rules.map(rule => {
+                    const due = ruleDueDate(rule, basisDate, now);
+                    return { rule, due, overdue: !!due && due < now };
+                  });
+                  const anyOverdue = rows.some(r => r.overdue);
+                  const edge = anyOverdue ? 'var(--danger)' : 'var(--warning)';
                   return (
-                    <div style={{ marginBottom: 8, padding: '7px 10px', borderRadius: 6, border: `1px solid ${expired ? 'var(--danger)' : 'var(--warning)'}` }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: expired ? 'var(--danger)' : 'var(--warning)' }}>⏳ LIMITED LIFE — {actionWord}{expired ? ' DUE' : ''}</span>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-                        {hasHours && <>TBO {Number(ll.tbo_hours).toFixed(0)} h</>}
-                        {hasHours && hasYears ? ' · ' : ''}
-                        {hasYears && <>{Number(ll.lifespan_years)} yr {expiry ? `→ ${expiry.toLocaleDateString('en-GB')}` : `from ${ll.lifespan_basis === 'install' ? 'install' : 'mfg'} date`}</>}
-                        {hasHours && hasYears ? ' (whichever first)' : ''}
-                      </div>
+                    <div style={{ marginBottom: 8, padding: '7px 10px', borderRadius: 6, border: `1px solid ${edge}` }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: edge }}>⏳ LIMITED LIFE</span>
+                      {rows.map(({ rule, due, overdue }) => (
+                        <div key={rule.key} style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                          <strong style={{ color: overdue ? 'var(--danger)' : 'inherit' }}>
+                            {lifeActionWord(rule.action)}{overdue ? ' DUE' : ''}
+                          </strong>
+                          {' — '}
+                          {describeRule(rule)}
+                          {due
+                            ? ` → ${fmtDate(due)}`
+                            : rule.months != null ? ` from ${basisShort(ll)} date` : ''}
+                          {rule.hours != null && rule.months != null ? ' (whichever first)' : ''}
+                        </div>
+                      ))}
                     </div>
                   );
                 })()}
@@ -2815,10 +3103,10 @@ export default function FleetDetail() {
                     </span>
                   </Field>
                 )}
-                <Field label="Manufactured"  value={s.manufacturing_date ? new Date(s.manufacturing_date).toLocaleDateString() : ''} />
-                <Field label="Installed"     value={s.date_installed     ? new Date(s.date_installed).toLocaleDateString()     : ''} />
-                <Field label="Expiry"        value={s.expiry_date        ? new Date(s.expiry_date).toLocaleDateString()        : ''} />
-                <Field label="Repack/Test"   value={s.repack_date        ? new Date(s.repack_date).toLocaleDateString()        : ''} />
+                <Field label="Manufactured"  value={s.manufacturing_date ? fmtDate(s.manufacturing_date) : ''} />
+                <Field label="Installed"     value={s.date_installed     ? fmtDate(s.date_installed)     : ''} />
+                <Field label="Expiry"        value={s.expiry_date        ? fmtDate(s.expiry_date)        : ''} />
+                <Field label="Repack/Test"   value={s.repack_date        ? fmtDate(s.repack_date)        : ''} />
                 <Field label="Notes"         value={s.notes} />
 
                 {/* Type-specific extra fields (propeller / governor) */}
@@ -2861,7 +3149,7 @@ export default function FleetDetail() {
                 {/* Uninstall details — only on uninstalled cards */}
                 {isUninstalled && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
-                    <Field label="Uninstalled"  value={s.uninstalled_at ? new Date(s.uninstalled_at).toLocaleDateString() : ''} />
+                    <Field label="Uninstalled"  value={s.uninstalled_at ? fmtDate(s.uninstalled_at) : ''} />
                     <Field label="Reason"       value={s.uninstall_reason} />
                     <Field label="TSN at remove" value={s.uninstall_tsn != null ? `${parseFloat(s.uninstall_tsn).toFixed(1)} h` : ''} mono />
                     <Field label="Technician"   value={s.uninstall_technician} />
@@ -2901,6 +3189,17 @@ export default function FleetDetail() {
                   onChange={e => setSerialSearch(e.target.value)}
                 />
                 <select
+                  style={{ flex: '0 0 170px' }}
+                  value={serialTypeFilter}
+                  onChange={e => setSerialTypeFilter(e.target.value)}
+                  title="Show only one component type"
+                >
+                  <option value="">All Types ({serials.length})</option>
+                  {filterTypes.map(t => (
+                    <option key={t} value={t}>{t} ({typeCounts[t]})</option>
+                  ))}
+                </select>
+                <select
                   style={{ flex: '0 0 160px' }}
                   value={serialSortField}
                   onChange={e => setSerialSortField(e.target.value)}
@@ -2921,10 +3220,19 @@ export default function FleetDetail() {
                   <button
                     className="btn btn-ghost btn-sm"
                     style={{ marginLeft: canEditComponents && !addingSerial ? 0 : 'auto' }}
-                    onClick={exportComponentsExcel}
-                    title="Export to Excel"
+                    onClick={exportComponentsDocument}
+                    title="Open a printable list of every component on this aircraft"
                   >
-                    ⬇ Export Excel
+                    ⬇ Export all components
+                  </button>
+                )}
+                {limitedLifeCount > 0 && (
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={exportLimitedLifeDocument}
+                    title="Open a printable list of the limited-life components, with life rules and due dates"
+                  >
+                    ⏳ Export limited life items ({limitedLifeCount})
                   </button>
                 )}
                 {canEditComponents && !addingSerial && (
@@ -3036,24 +3344,25 @@ export default function FleetDetail() {
                       {(() => {
                         const ll = componentNames.find(cn => cn.component_type === newSerial.component_type && cn.name === newSerial.component_name && Number(cn.is_limited_life));
                         if (!ll) return null;
-                        const basisLabel = ll.lifespan_basis === 'install' ? 'installed-on-aircraft date' : 'manufacturing date';
-                        const needDate = ll.lifespan_years != null && ll.lifespan_years !== '';
-                        const dateField = ll.lifespan_basis === 'install' ? 'date_installed' : 'manufacturing_date';
-                        const missing = needDate && !newSerial[dateField];
-                        const hasHours = ll.tbo_hours != null && ll.tbo_hours !== '';
+                        const rules = lifeRules(ll);
+                        if (!rules.length) return null;
+                        const needDate = rulesNeedDate(ll);
+                        const missing = needDate && !newSerial[basisField(ll)];
                         return (
                           <div style={{ gridColumn: '1 / -1', border: `1px solid ${missing ? 'var(--danger)' : 'var(--warning)'}`, background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px' }}>
-                            <div style={{ fontWeight: 700, color: 'var(--warning)' }}>⏳ Limited life item — {ll.life_action === 'overhaul' ? 'overhaul' : 'retire'}</div>
-                            <div style={{ fontSize: 13, marginTop: 4 }}>
-                              {ll.life_action === 'overhaul' ? 'Overhaul' : 'Retire'} at{' '}
-                              {hasHours && <strong>{Number(ll.tbo_hours).toFixed(0)} h</strong>}
-                              {hasHours && needDate ? ' or ' : ''}
-                              {needDate && <><strong>{Number(ll.lifespan_years)} year(s)</strong> from the {basisLabel}</>}
-                              {hasHours && needDate ? ' — whichever comes first.' : '.'}
-                            </div>
+                            <div style={{ fontWeight: 700, color: 'var(--warning)' }}>⏳ Limited life item</div>
+                            {rules.map(rule => (
+                              <div key={rule.key} style={{ fontSize: 13, marginTop: 4 }}>
+                                <strong>{lifeActionVerb(rule.action)}</strong>{rule.recurring ? ' ' : ' at '}
+                                <strong>{describeRule(rule)}</strong>
+                                {rule.hours != null && rule.months != null ? ' — whichever comes first.' : '.'}
+                              </div>
+                            ))}
                             {needDate && (
-                              <div style={{ fontSize: 12, color: missing ? 'var(--danger)' : 'var(--text-muted)', marginTop: 4 }}>
-                                {missing ? `⚠ The ${basisLabel} is required for this part.` : `Lifespan counted from the ${basisLabel}.`}
+                              <div style={{ fontSize: 12, color: missing ? 'var(--danger)' : 'var(--text-muted)', marginTop: 6 }}>
+                                {missing
+                                  ? `⚠ The ${basisLabel(ll)} is required for this part.`
+                                  : `Lifespan counted from the ${basisLabel(ll)}.`}
                               </div>
                             )}
                           </div>
@@ -3132,6 +3441,24 @@ export default function FleetDetail() {
                 <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                   No active components.{canEditComponents && ' Click "+ Add Component" to add one.'}
                 </div>
+              ) : serialSortField === 'component_type' ? (
+                // Grouped under a heading per type so a type is easy to find.
+                groupByType(activeComponents).map(g => (
+                  <div key={g.type} style={{ marginBottom: 20 }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+                      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                      color: 'var(--accent)',
+                    }}>
+                      {g.type}
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({g.items.length})</span>
+                      <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                      {g.items.map(s => <ComponentCard key={s.id} s={s} isUninstalled={false} />)}
+                    </div>
+                  </div>
+                ))
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
                   {activeComponents.map(s => <ComponentCard key={s.id} s={s} isUninstalled={false} />)}
@@ -3306,7 +3633,7 @@ export default function FleetDetail() {
                                 <span className="badge badge-success" style={{ fontSize: 10 }}>Resolved</span>
                                 {item.signed_off_by && (
                                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                                    by {item.signed_off_by}{item.resolved_at && ` · ${new Date(item.resolved_at).toLocaleDateString()}`}
+                                    by {item.signed_off_by}{item.resolved_at && ` · ${fmtDate(item.resolved_at)}`}
                                   </div>
                                 )}
                               </div>
@@ -3655,7 +3982,7 @@ export default function FleetDetail() {
 
                         {/* Date */}
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {new Date(doc.uploaded_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                          {fmtDate(doc.uploaded_at)}
                         </td>
 
                         {/* Actions */}
@@ -3846,7 +4173,7 @@ export default function FleetDetail() {
                 <tbody>
                   {[...versionLogSerial.version_logs].reverse().map((log, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{new Date(log.updated_at).toLocaleDateString()}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{fmtDate(log.updated_at)}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{log.old_version || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace', fontWeight: 600 }}>{log.new_version || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-secondary)' }}>{log.updated_by_name || '—'}</td>

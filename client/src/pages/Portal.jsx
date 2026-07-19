@@ -5,6 +5,7 @@ import {
   portalGetBulletins, portalGetFaq, portalGetRequests, portalCreateRequest,
   PORTAL_TOKEN, PORTAL_CUSTOMER,
 } from '../api/portal';
+import { fmtDate as fmtDateBase } from '../utils/formatDate';
 
 const STAGES = [
   { key: 'F1',    short: 'F1', desc: 'Carbon Fiber Parts Layup' },
@@ -17,10 +18,8 @@ const STAGES = [
 const DONE_STATUSES = new Set(['completed', 'delivered', 'in_service', 'maintenance']);
 const BULLETIN_LABELS = { mandatory: 'Mandatory', obligatory: 'Obligatory', recommended: 'Recommended', optional: 'Optional' };
 
-function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-}
+// One date format app-wide ("20 APR 2026") — see utils/formatDate.
+const fmtDate = (d) => fmtDateBase(d, '—');
 const fmtEur = (n) => Number(n).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtKg  = (n) => `${Number(n).toLocaleString('de-DE', { maximumFractionDigits: 1 })} kg`;
 

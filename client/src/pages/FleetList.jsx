@@ -4,6 +4,7 @@ import { getFleetList, createFleetAircraft, getFleetModels, getFleetSettings } f
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { parseBuildStatuses, buildStatusBadge, buildStatusLabel, DEFAULT_BUILD_STATUSES } from '../utils/buildStatus';
+import { fmtDate as fmtDateBase } from '../utils/formatDate';
 
 // Key used to persist the scroll position of the Aircraft list across navigation.
 // Stored in sessionStorage so it survives back/forward but resets on a new tab.
@@ -32,10 +33,8 @@ const EMPTY_FORM = {
   delivery_date: '',
 };
 
-function fmtDate(d) {
-  if (!d) return '-';
-  return new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
+// One date format app-wide ("20 APR 2026") — see utils/formatDate.
+const fmtDate = (d) => fmtDateBase(d, '-');
 
 export default function FleetList() {
   const navigate = useNavigate();

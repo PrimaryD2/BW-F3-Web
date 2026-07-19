@@ -25,7 +25,11 @@ COPY shared/ /app/shared/
 # Copy the freshly built React client dist from stage 1
 COPY --from=client-builder /app/client/dist /app/client/dist
 
-RUN chmod +x /app/server/docker-entrypoint.sh
+# Strip any CR left by a Windows checkout — /bin/sh treats a trailing \r as part
+# of the command and dies on the shebang line. .gitattributes pins these to LF,
+# but an archive/copy from a Windows host can still reintroduce them.
+RUN sed -i 's/\r$//' /app/server/docker-entrypoint.sh \
+ && chmod +x /app/server/docker-entrypoint.sh
 
 ENV NODE_ENV=production
 EXPOSE 3001

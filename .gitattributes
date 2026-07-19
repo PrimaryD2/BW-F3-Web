@@ -1,0 +1,6 @@
+# Shell scripts run inside Linux containers. A CRLF shebang/`set -e` line makes
+# the shell read the trailing \r as part of the command ("set: illegal option -"),
+# so these must stay LF even when checked out on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf

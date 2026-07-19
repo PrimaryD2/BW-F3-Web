@@ -774,6 +774,27 @@ const ALTER_STMTS = [
      created_by INT NULL,
      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
    )`,
+  // Limited-life lifespans are sometimes quoted in months ("16 months") or as a
+  // mix ("10 years and 2 months"), so years alone isn't enough. The two columns
+  // add together — total months = years*12 + months.
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS lifespan_months DECIMAL(6,2) NULL`,
+  // A part can carry two independent rules: e.g. replace at 15 years AND retest
+  // every 5 years until the replacement is due. The second rule shares the
+  // primary's lifespan_basis (both are measured from the same date) and is
+  // recurring by default, since retests/inspections repeat.
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS second_action VARCHAR(20) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS second_tbo_hours DECIMAL(10,1) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS second_lifespan_years DECIMAL(6,2) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS second_lifespan_months DECIMAL(6,2) NULL`,
+  `ALTER TABLE fleet_component_names ADD COLUMN IF NOT EXISTS second_is_recurring BOOLEAN NOT NULL DEFAULT TRUE`,
+  // Camber measurements (degrees) for left/right main gear — validated against
+  // admin-editable thresholds, same as toe-in. Negative values are normal
+  // (top of the wheel leaning inboard), hence the signed range defaults.
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS camber_left DECIMAL(5,2) NULL`,
+  `ALTER TABLE fleet_aircraft ADD COLUMN IF NOT EXISTS camber_right DECIMAL(5,2) NULL`,
+  `INSERT IGNORE INTO fleet_settings (setting_key, setting_value) VALUES
+     ('camber_wheel_min', '-2'),
+     ('camber_wheel_max', '2')`,
 ];
 
 async function migrate() {

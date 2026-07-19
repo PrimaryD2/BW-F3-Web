@@ -131,6 +131,7 @@ const AIRCRAFT_SELECT = `
   total_hours_tsn, engine_hours, prop_hours,
   next_inspection_date, next_inspection_hours,
   toe_in_left, toe_in_right,
+  camber_left, camber_right,
   customer_name, customer_id, production_stage, first_flight_date, delivery_date, financing_flag, serviced_by_us, notes,
   created_at, updated_at
 `;
@@ -184,7 +185,9 @@ router.get('/components', async (req, res) => {
     const { type, search } = req.query;
     let q = `
       SELECT fsn.*, fa.bw_serial, fa.registration, fa.model, fa.build_status,
-             cn.is_limited_life, cn.tbo_hours, cn.lifespan_years, cn.lifespan_basis, cn.life_action
+             cn.is_limited_life, cn.tbo_hours, cn.lifespan_years, cn.lifespan_months,
+             cn.lifespan_basis, cn.life_action, cn.second_action, cn.second_tbo_hours,
+             cn.second_lifespan_years, cn.second_lifespan_months, cn.second_is_recurring
       FROM fleet_serial_numbers fsn
       JOIN fleet_aircraft fa ON fa.id = fsn.aircraft_id
       LEFT JOIN fleet_component_names cn ON cn.component_type = fsn.component_type AND cn.name = fsn.component_name
@@ -858,6 +861,7 @@ router.put('/:id', requireRole('admin', 'supervisor'), async (req, res) => {
     'total_hours_tsn', 'engine_hours', 'prop_hours',
     'next_inspection_date', 'next_inspection_hours',
     'toe_in_left', 'toe_in_right',
+    'camber_left', 'camber_right',
     'customer_name', 'customer_id', 'production_stage', 'first_flight_date', 'delivery_date',
     'financing_flag', 'serviced_by_us', 'notes',
   ];

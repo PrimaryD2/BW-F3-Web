@@ -2,11 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { getDemos, createDemo, updateDemo, deleteDemo, getFleetList } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { fmtDate as fmtDateBase } from '../utils/formatDate';
 
-function fmtDate(d) {
-  if (!d) return '–';
-  return new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-}
+// One date format app-wide ("20 APR 2026") — see utils/formatDate.
+const fmtDate = (d) => fmtDateBase(d, '–');
 function daysUntil(dateStr) {
   if (!dateStr) return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);

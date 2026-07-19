@@ -8,12 +8,11 @@ import {
   getMaintenanceRequests,
   getDemos,
 } from '../api';
+import { fmtDate as fmtDateBase } from '../utils/formatDate';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-function fmtDate(d) {
-  if (!d) return '–';
-  return new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-}
+// One date format app-wide ("20 APR 2026") — see utils/formatDate.
+const fmtDate = (d) => fmtDateBase(d, '–');
 
 function daysUntil(dateStr) {
   if (!dateStr) return null;

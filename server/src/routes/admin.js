@@ -483,20 +483,44 @@ router.get('/component-names', async (_req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+// What a part needs when its life runs out.
+const LIFE_ACTIONS = ['retire', 'overhaul', 'retest', 'inspect'];
+
 // Normalise the limited-life fields off a request body.
 function limitedLifeFields(body) {
   const isLL = !!body.is_limited_life;
   const num = (v) => (v === '' || v == null || isNaN(parseFloat(v)) ? null : parseFloat(v));
   const basis = body.lifespan_basis === 'install' ? 'install' : 'manufacturing';
-  const action = body.life_action === 'overhaul' ? 'overhaul' : 'retire';
+  const action = LIFE_ACTIONS.includes(body.life_action) ? body.life_action : 'retire';
+  // The second rule only exists when it names an action AND carries a limit —
+  // an action with every interval left blank would never come due.
+  const second = LIFE_ACTIONS.includes(body.second_action) ? body.second_action : null;
+  const secondHours  = num(body.second_tbo_hours);
+  const secondYears  = num(body.second_lifespan_years);
+  const secondMonths = num(body.second_lifespan_months);
+  const hasSecond = isLL && second && (secondHours != null || secondYears != null || secondMonths != null);
   return {
     is_limited_life: isLL ? 1 : 0,
     tbo_hours: isLL ? num(body.tbo_hours) : null,
     lifespan_years: isLL ? num(body.lifespan_years) : null,
+    lifespan_months: isLL ? num(body.lifespan_months) : null,
     lifespan_basis: basis,
     life_action: action,
+    second_action: hasSecond ? second : null,
+    second_tbo_hours: hasSecond ? secondHours : null,
+    second_lifespan_years: hasSecond ? secondYears : null,
+    second_lifespan_months: hasSecond ? secondMonths : null,
+    second_is_recurring: hasSecond && body.second_is_recurring !== false ? 1 : 0,
   };
 }
+
+// Column order shared by the component-name INSERT and UPDATE below.
+const LL_COLUMNS = [
+  'is_limited_life', 'tbo_hours', 'lifespan_years', 'lifespan_months',
+  'lifespan_basis', 'life_action', 'second_action', 'second_tbo_hours',
+  'second_lifespan_years', 'second_lifespan_months', 'second_is_recurring',
+];
+const llValues = (ll) => LL_COLUMNS.map(c => ll[c]);
 
 router.post('/component-names', async (req, res) => {
   const { component_type, name, sort_order = 0 } = req.body || {};
@@ -505,8 +529,9 @@ router.post('/component-names', async (req, res) => {
   const ll = limitedLifeFields(req.body || {});
   try {
     const r = await query(
-      'INSERT INTO fleet_component_names (component_type, name, sort_order, is_limited_life, tbo_hours, lifespan_years, lifespan_basis, life_action) VALUES (?,?,?,?,?,?,?,?)',
-      [component_type.trim(), name.trim(), sort_order, ll.is_limited_life, ll.tbo_hours, ll.lifespan_years, ll.lifespan_basis, ll.life_action]
+      `INSERT INTO fleet_component_names (component_type, name, sort_order, ${LL_COLUMNS.join(', ')})
+       VALUES (?,?,?,${LL_COLUMNS.map(() => '?').join(',')})`,
+      [component_type.trim(), name.trim(), sort_order, ...llValues(ll)]
     );
     const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [r.insertId]);
     res.status(201).json(rows[0]);
@@ -518,8 +543,8 @@ router.put('/component-names/:id', async (req, res) => {
   const ll = limitedLifeFields(req.body || {});
   try {
     await query(
-      'UPDATE fleet_component_names SET component_type=?, name=?, sort_order=?, is_limited_life=?, tbo_hours=?, lifespan_years=?, lifespan_basis=?, life_action=? WHERE id=?',
-      [component_type, name, sort_order ?? 0, ll.is_limited_life, ll.tbo_hours, ll.lifespan_years, ll.lifespan_basis, ll.life_action, req.params.id]
+      `UPDATE fleet_component_names SET component_type=?, name=?, sort_order=?, ${LL_COLUMNS.map(c => `${c}=?`).join(', ')} WHERE id=?`,
+      [component_type, name, sort_order ?? 0, ...llValues(ll), req.params.id]
     );
     const rows = await query('SELECT * FROM fleet_component_names WHERE id = ?', [req.params.id]);
     res.json(rows[0]);

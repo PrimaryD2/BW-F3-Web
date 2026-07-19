@@ -18,6 +18,7 @@ import {
 } from '../api';
 import { useToast } from '../context/ToastContext';
 import { parseBuildStatuses, DEFAULT_BUILD_STATUSES } from '../utils/buildStatus';
+import { LIFE_ACTIONS, lifeActionVerb, limitedLifeSummary } from '../utils/limitedLife';
 
 const ROLE_BADGE = { admin: 'badge-danger', supervisor: 'badge-warning', worker: 'badge-success' };
 const TABS = ['Users', 'Models', 'Bulletins', 'Configuration Config', 'Service Templates', 'Event Types', 'Component Types', 'Component Names', 'Settings', 'Customer Portal'];
@@ -282,7 +283,7 @@ function PortalFaqSection() {
 // ─── Settings Section (toe-in thresholds etc.) ────────────────────────────────
 function SettingsSection() {
   const toast = useToast();
-  const [form, setForm]     = useState({ toe_in_wheel_min: '', toe_in_wheel_max: '', toe_in_total_min: '', toe_in_total_max: '' });
+  const [form, setForm]     = useState({ toe_in_wheel_min: '', toe_in_wheel_max: '', toe_in_total_min: '', toe_in_total_max: '', camber_wheel_min: '', camber_wheel_max: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [statuses, setStatuses] = useState(DEFAULT_BUILD_STATUSES);
@@ -339,13 +340,13 @@ function SettingsSection() {
 
   return (
     <div>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Toe-in Thresholds</div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Wheel Alignment Thresholds</div>
       <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
-        Acceptable main gear toe-in ranges (in degrees). These control the green/red validation shown on each aircraft's overview.
+        Acceptable main gear toe-in and camber ranges (in degrees). These control the green/red validation shown on each aircraft's overview.
       </p>
       <div className="card" style={{ maxWidth: 560 }}>
         <form onSubmit={handleSave}>
-          <div style={{ fontWeight: 600, marginBottom: 10 }}>Per Wheel (each main gear)</div>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Toe-in — Per Wheel (each main gear)</div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
             <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
               <label>Minimum (°)</label>
@@ -356,7 +357,7 @@ function SettingsSection() {
               <input type="number" step="0.01" value={form.toe_in_wheel_max} onChange={e => setForm(f => ({ ...f, toe_in_wheel_max: e.target.value }))} />
             </div>
           </div>
-          <div style={{ fontWeight: 600, marginBottom: 10 }}>Total (left + right combined)</div>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Toe-in — Total (left + right combined)</div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
             <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
               <label>Minimum (°)</label>
@@ -367,6 +368,20 @@ function SettingsSection() {
               <input type="number" step="0.01" value={form.toe_in_total_max} onChange={e => setForm(f => ({ ...f, toe_in_total_max: e.target.value }))} />
             </div>
           </div>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Camber — Per Wheel (each main gear)</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Minimum (°)</label>
+              <input type="number" step="0.01" value={form.camber_wheel_min} onChange={e => setForm(f => ({ ...f, camber_wheel_min: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ flex: '1 1 120px', margin: 0 }}>
+              <label>Maximum (°)</label>
+              <input type="number" step="0.01" value={form.camber_wheel_max} onChange={e => setForm(f => ({ ...f, camber_wheel_max: e.target.value }))} />
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 18 }}>
+            Negative camber (top of the wheel leaning inboard) is normal, so this range can span zero.
+          </p>
           <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save Settings'}</button>
         </form>
       </div>
@@ -2874,20 +2889,62 @@ function ComponentTypesSection() {
 }
 
 // ─── Component Names Section ──────────────────────────────────────────────────
-const EMPTY_CN = { component_type: '', name: '', sort_order: 0, is_limited_life: false, tbo_hours: '', lifespan_years: '', lifespan_basis: 'manufacturing', life_action: 'retire' };
+const EMPTY_CN = {
+  component_type: '', name: '', sort_order: 0, is_limited_life: false,
+  tbo_hours: '', lifespan_years: '', lifespan_months: '',
+  lifespan_basis: 'manufacturing', life_action: 'retire',
+  second_action: '', second_tbo_hours: '', second_lifespan_years: '',
+  second_lifespan_months: '', second_is_recurring: true,
+};
 
-// Short human summary of a component name's limited-life rule.
-function limitedLifeSummary(n) {
-  if (!n || !Number(n.is_limited_life)) return null;
-  const bits = [];
-  if (n.tbo_hours != null && n.tbo_hours !== '') bits.push(`${Number(n.tbo_hours).toFixed(0)} h`);
-  if (n.lifespan_years != null && n.lifespan_years !== '') bits.push(`${Number(n.lifespan_years)} yr (${n.lifespan_basis === 'install' ? 'install' : 'mfg'})`);
-  const action = n.life_action === 'overhaul' ? 'Overhaul' : 'Retire';
-  return `${action}: ${bits.length ? bits.join(' or ') : 'limited life'}`;
+// Pull a component-name row into the shape the edit form expects.
+const cnToForm = (n) => ({
+  component_type: n.component_type,
+  name: n.name,
+  sort_order: n.sort_order,
+  is_limited_life: !!Number(n.is_limited_life),
+  tbo_hours: n.tbo_hours ?? '',
+  lifespan_years: n.lifespan_years ?? '',
+  lifespan_months: n.lifespan_months ?? '',
+  lifespan_basis: n.lifespan_basis || 'manufacturing',
+  life_action: n.life_action || 'retire',
+  second_action: n.second_action || '',
+  second_tbo_hours: n.second_tbo_hours ?? '',
+  second_lifespan_years: n.second_lifespan_years ?? '',
+  second_lifespan_months: n.second_lifespan_months ?? '',
+  second_is_recurring: n.second_is_recurring == null ? true : !!Number(n.second_is_recurring),
+});
+
+// One rule's inputs — hours, years, months. Shared by the primary rule and the
+// optional second one, which differ only in field prefix.
+function LifeRuleInputs({ form, setForm, prefix, hoursPlaceholder }) {
+  const k = (base) => (prefix ? `${prefix}_${base}` : base);
+  const field = (base, label, placeholder, step) => (
+    <div className="form-group" style={{ flex: '0 0 120px', margin: 0 }}>
+      <label>{label}</label>
+      <input
+        type="number" min="0" step={step}
+        value={form[k(base)] ?? ''}
+        onChange={e => setForm(f => ({ ...f, [k(base)]: e.target.value }))}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+  return (
+    <>
+      {field('tbo_hours', 'TBO hours', hoursPlaceholder, '1')}
+      {field('lifespan_years', 'Years', 'e.g. 10', '1')}
+      {field('lifespan_months', 'Months', 'e.g. 2', '1')}
+    </>
+  );
 }
 
 function LimitedLifeFields({ form, setForm, compact }) {
   const on = !!form.is_limited_life;
+  const secondOn = !!form.second_action;
+  const actionOptions = LIFE_ACTIONS.map(a => <option key={a.value} value={a.value}>{a.label}</option>);
+  const primaryVerb = lifeActionVerb(form.life_action).toLowerCase();
+
   return (
     <div style={{ marginTop: compact ? 8 : 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-secondary)' }}>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
@@ -2895,33 +2952,64 @@ function LimitedLifeFields({ form, setForm, compact }) {
         ⏳ Limited life item
       </label>
       {on && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flex: '0 0 140px', margin: 0 }}>
-            <label>Action required</label>
-            <select value={form.life_action || 'retire'} onChange={e => setForm(f => ({ ...f, life_action: e.target.value }))}>
-              <option value="retire">Retire (replace)</option>
-              <option value="overhaul">Overhaul</option>
-            </select>
+        <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ flex: '0 0 150px', margin: 0 }}>
+              <label>Action required</label>
+              <select value={form.life_action || 'retire'} onChange={e => setForm(f => ({ ...f, life_action: e.target.value }))}>
+                {actionOptions}
+              </select>
+            </div>
+            <LifeRuleInputs form={form} setForm={setForm} prefix="" hoursPlaceholder="e.g. 2000" />
+            <div className="form-group" style={{ flex: '0 0 180px', margin: 0 }}>
+              <label>Lifespan counted from</label>
+              <select value={form.lifespan_basis || 'manufacturing'} onChange={e => setForm(f => ({ ...f, lifespan_basis: e.target.value }))}>
+                <option value="manufacturing">Manufacturing date</option>
+                <option value="install">Installed-on-aircraft date</option>
+              </select>
+            </div>
+            <div style={{ flex: '1 1 100%', fontSize: 11, color: 'var(--text-muted)' }}>
+              Enter TBO hours and/or a lifespan — whichever is reached first triggers the {primaryVerb}.
+              Years and months add together, so 16 months or “10 years and 2 months” both work.
+              The chosen date becomes required when adding this component.
+            </div>
           </div>
-          <div className="form-group" style={{ flex: '0 0 130px', margin: 0 }}>
-            <label>TBO hours</label>
-            <input type="number" min="0" step="1" value={form.tbo_hours} onChange={e => setForm(f => ({ ...f, tbo_hours: e.target.value }))} placeholder="e.g. 2000" />
-          </div>
-          <div className="form-group" style={{ flex: '0 0 130px', margin: 0 }}>
-            <label>Lifespan (years)</label>
-            <input type="number" min="0" step="0.5" value={form.lifespan_years} onChange={e => setForm(f => ({ ...f, lifespan_years: e.target.value }))} placeholder="e.g. 12" />
-          </div>
-          <div className="form-group" style={{ flex: '0 0 180px', margin: 0 }}>
-            <label>Years counted from</label>
-            <select value={form.lifespan_basis || 'manufacturing'} onChange={e => setForm(f => ({ ...f, lifespan_basis: e.target.value }))}>
-              <option value="manufacturing">Manufacturing date</option>
-              <option value="install">Installed-on-aircraft date</option>
-            </select>
-          </div>
-          <div style={{ flex: '1 1 100%', fontSize: 11, color: 'var(--text-muted)' }}>
-            Enter TBO hours and/or a lifespan in years — whichever is reached first triggers the {form.life_action === 'overhaul' ? 'overhaul' : 'retirement'}. The chosen date becomes required when adding this component.
-          </div>
-        </div>
+
+          {/* ── Optional second rule ── */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13, marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+            <input
+              type="checkbox"
+              checked={secondOn}
+              onChange={e => setForm(f => ({ ...f, second_action: e.target.checked ? 'retest' : '' }))}
+            />
+            ➕ Second action on this part
+          </label>
+          {secondOn && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, alignItems: 'flex-end' }}>
+              <div className="form-group" style={{ flex: '0 0 150px', margin: 0 }}>
+                <label>Action required</label>
+                <select value={form.second_action} onChange={e => setForm(f => ({ ...f, second_action: e.target.value }))}>
+                  {actionOptions}
+                </select>
+              </div>
+              <LifeRuleInputs form={form} setForm={setForm} prefix="second" hoursPlaceholder="e.g. 500" />
+              <div className="form-group" style={{ flex: '0 0 180px', margin: 0 }}>
+                <label>Frequency</label>
+                <select
+                  value={form.second_is_recurring ? 'recurring' : 'once'}
+                  onChange={e => setForm(f => ({ ...f, second_is_recurring: e.target.value === 'recurring' }))}
+                >
+                  <option value="recurring">Repeats every interval</option>
+                  <option value="once">One time only</option>
+                </select>
+              </div>
+              <div style={{ flex: '1 1 100%', fontSize: 11, color: 'var(--text-muted)' }}>
+                Runs alongside the {primaryVerb} above, counted from the same date — e.g. retire at 15 years
+                <em> and </em> retest every 5 years until the replacement falls due.
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -3082,7 +3170,7 @@ function ComponentNamesSection() {
                             <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>✕</button>
                           </div>
                         : <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(n.id); setEditForm({ component_type: n.component_type, name: n.name, sort_order: n.sort_order, is_limited_life: !!Number(n.is_limited_life), tbo_hours: n.tbo_hours ?? '', lifespan_years: n.lifespan_years ?? '', lifespan_basis: n.lifespan_basis || 'manufacturing', life_action: n.life_action || 'retire' }); }}>✎</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditId(n.id); setEditForm(cnToForm(n)); }}>✎</button>
                             <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(n.id)}>✕</button>
                           </div>}
                     </td>
